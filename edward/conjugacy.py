@@ -67,8 +67,11 @@ def rv_value(node):
     return de_identity(tf.identity(node).op).outputs[0]
 
 # TODO: Deal with case where sufficient statistic involves multiplication: t(x) = f(x)*g(x).
+# TODO: Deal with constrained support (mostly for beta/Dirichlet).
 # TODO: Deal with multivariate normals.
 # TODO: Deal with squared terms in Gaussians.
+# TODO: Repeat replacements until convergence.
+#       E.g., Log(Inv(Mul(a, b))) = -Log(Mul(a, b)) = -Log(a) + -Log(b)
 
 def opify(node):
     if tf.is_numeric_tensor(node):
@@ -110,12 +113,6 @@ def opify(node):
 #     new_root = tf.contrib.copy_graph.copy_op_to_graph(root, new_g, [])
 #     return new_g, new_root, new_node
 
-def is_log_mul(node):
-    return (node.type == 'Log') and (de_identity(node.inputs[0].op).type == 'Mul')
-
-def is_log_inv(node):
-    return (node.type == 'Log') and (de_identity(node.inputs[0].op).type == 'Inv')
-
 def copy_inputs(old_inputs, new_g):
     new_inputs = []
     for input in old_inputs:
@@ -130,17 +127,37 @@ def replace_node(node, root, replace_f):
     new_root = tf.contrib.copy_graph.copy_op_to_graph(root, new_g, [])
     return new_g, new_root, new_node
 
+def make_is_type(t):
+    return lambda node: node.type == t
+           
 def div_to_inv(node, new_g, scope):
     new_inputs = copy_inputs(node.inputs, new_g)
     return tf.mul(new_inputs[0], tf.inv(new_inputs[1]), name=scope)
+
+def is_log_mul(node):
+    return (node.type == 'Log') and (de_identity(node.inputs[0].op).type == 'Mul')
 
 def log_mul_to_add_log(node, new_g, scope):
     new_inputs = copy_inputs(de_identity(node.inputs[0].op).inputs, new_g)
     return tf.add(tf.log(new_inputs[0]), tf.log(new_inputs[1]), name=scope)
 
+def is_log_inv(node):
+    return (node.type == 'Log') and (de_identity(node.inputs[0].op).type == 'Inv')
+
 def log_inv_to_neg_log(node, new_g, scope):
     new_inputs = copy_inputs(de_identity(node.inputs[0].op).inputs, new_g)
     return tf.neg(tf.log(new_inputs[0]), name=scope)
+
+def square_to_mul(node, new_g, scope):
+    new_inputs = copy_inputs(node.inputs, new_g)
+    return tf.mul(new_inputs[0], new_inputs[0], name=scope)
+
+# def is_square_mul(node, new_g, scope):
+#     return (node.type == 'Square') and (de_identity(node.inputs[0].op).type == 'Mul')
+
+# def square_mul_to_mul_square(node, new_g, scope):
+#     new_inputs = copy_inputs(de_identity(node.inputs[0].op).inputs, new_g)
+#     return tf.mul(tf.square(new_inputs[0]), tf.square(new_inputs[1]), name=scope)
 
 # def replace_node(node, root, replace_f):
 #     new_g = tf.Graph()
@@ -168,7 +185,7 @@ def log_inv_to_neg_log(node, new_g, scope):
 
 
 def _replace_until_done_rec(node, root, node_tester, replace_f, stop_nodes=None, incl_node=None):
-#     print 'visiting %s-%s' % (node.type, node.name)
+#     print 'visiting %s-%s' % (node.type, node.name), node_tester(node)
     if stop_nodes is None:
         stop_nodes = set()
     if node in stop_nodes:
@@ -196,9 +213,15 @@ def replace_until_done(root, node_tester, replace_f, stop_nodes=None, incl_node=
 
         new_g, new_root, _ = result
         stop_nodes = set([new_g.get_operation_by_name(i.name) for i in stop_nodes])
-        incl_node = new_g.get_operation_by_name(incl_node.name)
+        if incl_node is not None:
+            incl_node = new_g.get_operation_by_name(incl_node.name)
 
-    return new_g, new_root, stop_nodes, incl_node
+    result = [new_g, new_root]
+    if stop_nodes is not None:
+        result.append(stop_nodes)
+    if incl_node is not None:
+        result.append(incl_node)
+    return tuple(result)
 
 _linear_types = ['Add', 'AddN', 'Sub', 'Mul', 'Identity', 'Sum', 'Assert', 'Reshape', 'Neg']
 def find_s_stat_nodes(root, node, blanket, depth=0):
@@ -217,14 +240,20 @@ def find_s_stat_nodes(root, node, blanket, depth=0):
     Returns:
       nodes: A list of unique nodes that compute sufficient statistics of ```node```.
     '''
-    if (root.type in _linear_types):
+    if root == node:
+        return [root]
+    elif root in blanket:
+        return []
+    elif (root.type in _linear_types):
         result = []
         for c in root.inputs:
             new_nodes = find_s_stat_nodes(c.op, node, blanket, depth=depth+1)
             result += new_nodes
+#         if (root.type == 'Mul') and (len(result) > 1):
+#             result = [root]
         return list(set(result))
     else:
-        if (root == node) or is_child(root, node, blanket):
+        if is_child(root, node, blanket):
             return [root]
         else:
             return []
@@ -259,13 +288,18 @@ def compute_n_params(logp, s_stats, blanket):
     return result
 
 def complete_conditional(logp, rv, blanket, name=None):
-    new_g, new_logp, new_blanket, new_rv = replace_until_done(logp.op, lambda node: node.type == 'Div', div_to_inv,
-                                         stop_nodes=set([opify(i) for i in blanket]),
-                                         incl_node=opify(rv))
+    new_logp = logp.op
+    new_rv = opify(rv)
+    new_blanket = set([opify(i) for i in blanket])
+    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, make_is_type('Square'), square_to_mul,
+                                                              stop_nodes=new_blanket, incl_node=new_rv)
+    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, make_is_type('Div'), div_to_inv,
+                                                              stop_nodes=new_blanket, incl_node=new_rv)
     new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_log_mul, log_mul_to_add_log,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
     new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_log_inv, log_inv_to_neg_log,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
+
     with new_g.as_default():
         rv = new_g.get_operation_by_name(opify(rv).name)
         blanket = [new_g.get_operation_by_name(opify(i).name) for i in blanket]
@@ -281,7 +315,7 @@ def complete_conditional(logp, rv, blanket, name=None):
             if (s_stat not in stat_param_dict):
                 stat_param_dict[s_stat] = n_param
             else:
-                stat_param_dict[s_stat] += n_param
+                stat_param_dict[s_stat] = tf.add(stat_param_dict[s_stat], n_param)
 
         s_stats = list(stat_param_dict.keys())
         order = np.argsort(s_stats)
