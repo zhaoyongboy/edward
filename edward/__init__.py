@@ -13,7 +13,7 @@ from edward.criticisms import evaluate, ppc
 from edward.inferences import Inference, MonteCarlo, VariationalInference, \
     HMC, MetropolisHastings, SGLD, \
     KLpq, KLqp, MFVI, ReparameterizationKLqp, ReparameterizationKLKLqp, \
-    ReparameterizationEntropyKLqp, ScoreKLqp, ScoreKLKLqp, ScoreEntropyKLqp, \
+    ReparameterizationEntropyKLqp, ScoreKLqp, ScoreRBKLqp, ScoreKLKLqp, ScoreEntropyKLqp, \
     MAP, Laplace
 from edward.models import PyMC3Model, PythonModel, StanModel, \
     RandomVariable

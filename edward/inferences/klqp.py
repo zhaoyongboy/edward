@@ -63,7 +63,8 @@ class KLqp(VariationalInference):
     1. score function gradients (Paisley et al., 2012)
     2. reparameterization gradients (Kingma and Welling, 2014)
 
-    of the loss function.
+    of the loss function. For both stochastic gradients, it uses
+    Rao-Blackwellization for variance reduction.
 
     If the variational model is a normal distribution and the prior is
     standard normal, then loss function can be written as
@@ -89,7 +90,7 @@ class KLqp(VariationalInference):
       # elif is_analytic_entropy:
       #    return build_score_entropy_loss_and_gradients(self, scope)
       else:
-        return build_score_loss_and_gradients(self, scope)
+        return build_score_rb_loss_and_gradients(self, scope)
     else:
       if is_analytic_kl:
         loss = build_reparam_kl_loss(self)
@@ -223,6 +224,35 @@ class ScoreKLqp(VariationalInference):
 
   def build_loss_and_gradients(self, scope=None):
     return build_score_loss_and_gradients(self, scope)
+
+
+class ScoreRBKLqp(VariationalInference):
+  """Variational inference with the KL divergence
+
+  .. math::
+
+    KL( q(z; \lambda) || p(z | x) ).
+
+  This class minimizes the objective using the score function
+  gradient and Rao-Blackwellization.
+  """
+  def __init__(self, *args, **kwargs):
+    super(ScoreRBKLqp, self).__init__(*args, **kwargs)
+
+  def initialize(self, n_samples=1, *args, **kwargs):
+    """Initialization.
+
+    Parameters
+    ----------
+    n_samples : int, optional
+      Number of samples from variational model for calculating
+      stochastic gradients.
+    """
+    self.n_samples = n_samples
+    return super(ScoreRBKLqp, self).initialize(*args, **kwargs)
+
+  def build_loss_and_gradients(self, scope=None):
+    return build_score_rb_loss_and_gradients(self, scope)
 
 
 class ScoreKLKLqp(VariationalInference):
@@ -495,6 +525,81 @@ def build_score_loss_and_gradients(inference, scope=None):
       -tf.reduce_mean(q_log_prob * tf.stop_gradient(losses)),
       [v.ref() for v in var_list])
   grads_and_vars = list(zip(grads, var_list))
+  return loss, grads_and_vars
+
+
+def build_score_rb_loss_and_gradients(inference, scope=None):
+  """Build loss function and gradients based on the score function
+  estimator (Paisley et al., 2012) and Rao-Blackwellization (Ranganath
+  et al., 2014).
+
+  Computed by sampling from :math:`q(z;\lambda)` and evaluating the
+  expectation using Monte Carlo sampling.
+  """
+  # TODO non-MF case, which loops over each variable instead of each
+  # variational factor
+  #for var in var_list:
+  #  qzs = get_descendants(var, list(six.itervalues(inference.latent_vars)))
+  # TODO model parameters
+  # Build tensors for loss and gradient calculations, one set for each
+  # sample from the variational distribution.
+  p_log_probs = [{}] * inference.n_samples
+  q_log_probs = [{}] * inference.n_samples
+  for s in range(inference.n_samples):
+    # Build tensors for variational log-densities.
+    z_sample = {}
+    for z, qz in six.iteritems(inference.latent_vars):
+      # Copy q(z) to obtain new set of posterior samples.
+      qz_copy = copy(qz, scope='inference_' + str(s))
+      z_sample[z] = qz_copy.value()
+      q_log_probs[s][z] = tf.reduce_sum(
+          qz.log_prob(tf.stop_gradient(z_sample[z])))
+
+    # Form dictionary in order to replace conditioning on prior or
+    # observed variable with conditioning on posterior sample or
+    # observed data.
+    dict_swap = z_sample
+    for x, obs in six.iteritems(inference.data):
+      if isinstance(x, RandomVariable):
+        dict_swap[x] = obs
+
+    # Build tensors for model log-densities.
+    for z in six.iterkeys(inference.latent_vars):
+      z_copy = copy(z, dict_swap, scope='inference_' + str(s))
+      p_log_probs[s][z] = tf.reduce_sum(z_copy.log_prob(z_sample[z]))
+
+    for x, obs in six.iteritems(inference.data):
+      if isinstance(x, RandomVariable):
+        x_copy = copy(x, dict_swap, scope='inference_' + str(s))
+        p_log_probs[s][x] = tf.reduce_sum(x_copy.log_prob(obs))
+
+  # Take gradients for each set of parameters in a variational factor.
+  var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
+                               scope=scope)
+  model_rvs = list(six.iterkeys(inference.latent_vars)) + \
+              [x for x in six.iterkeys(inference.data)
+               if isinstance(x, RandomVariable)]
+  grads_and_vars = []
+  for z, qz in six.iteritems(inference.latent_vars):
+    model_rvs_i = z.get_descendants(model_rvs) + [z]
+    pi_log_prob = [0.0] * inference.n_samples
+    qi_log_prob = [0.0] * inference.n_samples
+    for s in range(inference.n_samples):
+      qi_log_prob[s] = tf.reduce_sum([q_log_probs[s][rv] for rv in model_rvs_i
+                                      if rv in six.iterkeys(inference.latent_vars)])
+      pi_log_prob[s] = tf.reduce_sum([p_log_probs[s][rv] for rv in model_rvs_i])
+
+    pi_log_prob = tf.pack(pi_log_prob)
+    qi_log_prob = tf.pack(qi_log_prob)
+    qz_vars = qz.get_variables(var_list)
+    grads = tf.gradients(
+        -tf.reduce_mean(qi_log_prob * tf.stop_gradient(pi_log_prob - qi_log_prob)),
+        qz_vars)
+    for grad, var in zip(tf.unpack(grads), qz_vars):
+      grads_and_vars.append((grad, var))
+
+  loss = -(tf.reduce_sum(list(six.itervalues(p_log_probs[0]))) -
+           tf.reduce_sum(list(six.itervalues(q_log_probs[0]))))
   return loss, grads_and_vars
 
 
