@@ -69,49 +69,15 @@ def rv_value(node):
 # TODO: Deal with case where sufficient statistic involves multiplication: t(x) = f(x)*g(x).
 # TODO: Deal with constrained support (mostly for beta/Dirichlet).
 # TODO: Deal with multivariate normals.
-# TODO: Deal with squared terms in Gaussians.
 # TODO: Repeat replacements until convergence.
 #       E.g., Log(Inv(Mul(a, b))) = -Log(Mul(a, b)) = -Log(a) + -Log(b)
+# TODO: Make transformations work with slicing, reshaping, adding 0, multiplying by 1.
 
 def opify(node):
     if tf.is_numeric_tensor(node):
         return node.op
     else:
         return node
-
-
-# def div_to_inv(node, inputs):
-#     print 'replacing %s' % node.name
-#     with tf.name_scope(node.name) as scope:
-# #     with tf.name_scope(node.name[:node.name.rfind('/')]):
-#         inv = tf.inv(inputs[1])
-# #     return tf.mul(inputs[0], inv, name=node.name)
-#         return tf.mul(inputs[0], inv, name=scope)
-
-# def log_mul_to_add_log(node, root):
-#     assert(is_log_mul(node))
-#     new_g = tf.Graph()
-#     old_inputs = node.inputs[0].op.inputs
-#     new_input0 = tf.contrib.copy_graph.copy_op_to_graph(old_inputs[0].op, new_g, []).outputs[0]
-#     new_input1 = tf.contrib.copy_graph.copy_op_to_graph(old_inputs[1].op, new_g, []).outputs[0]
-#     with new_g.as_default():
-#         with tf.name_scope(node.name) as scope:
-#             new_node = tf.add(tf.log(new_input0), tf.log(new_input1),
-#                               name=scope)
-#     new_root = tf.contrib.copy_graph.copy_op_to_graph(root, new_g, [])
-#     return new_g, new_root, new_node
-
-# def div_to_inv(node):
-#     assert(node.type == 'Div')
-#     new_g = tf.Graph()
-#     old_inputs = node.inputs
-#     new_inputs = [tf.contrib.copy_graph.copy_op_to_graph(item.op, new_g, []).outputs[0]
-#                   for item in old_inputs]
-#     with new_g.as_default():
-#         with tf.name_scope(node.name) as scope:
-#             new_node = tf.mul(new_inputs[0], tf.inv(new_inputs[1]), name=scope)
-#     new_root = tf.contrib.copy_graph.copy_op_to_graph(root, new_g, [])
-#     return new_g, new_root, new_node
 
 def copy_inputs(old_inputs, new_g):
     new_inputs = []
@@ -148,41 +114,95 @@ def log_inv_to_neg_log(node, new_g, scope):
     new_inputs = copy_inputs(de_identity(node.inputs[0].op).inputs, new_g)
     return tf.neg(tf.log(new_inputs[0]), name=scope)
 
-def square_to_mul(node, new_g, scope):
-    new_inputs = copy_inputs(node.inputs, new_g)
-    return tf.mul(new_inputs[0], new_inputs[0], name=scope)
+def is_square_mul(node):
+    return (node.type == 'Square') and (de_identity(node.inputs[0].op).type == 'Mul')
 
-# def is_square_mul(node, new_g, scope):
-#     return (node.type == 'Square') and (de_identity(node.inputs[0].op).type == 'Mul')
+def square_mul_to_mul_square(node, new_g, scope):
+    new_inputs = copy_inputs(de_identity(node.inputs[0].op).inputs, new_g)
+    return tf.mul(tf.square(new_inputs[0]), tf.square(new_inputs[1]), name=scope)
 
-# def square_mul_to_mul_square(node, new_g, scope):
+def is_square_add(node):
+    return (node.type == 'Square') and (de_identity(node.inputs[0].op).type == 'Add')
+
+def square_add_expand(node, new_g, scope):
+    new_inputs = copy_inputs(de_identity(node.inputs[0].op).inputs, new_g)
+    return tf.add(tf.square(new_inputs[0]) + tf.square(new_inputs[1]),
+                  2 * new_inputs[0] * new_inputs[1], name=scope)
+
+def is_square_sub(node):
+    return (node.type == 'Square') and (de_identity(node.inputs[0].op).type == 'Sub')
+
+def square_sub_expand(node, new_g, scope):
+    new_inputs = copy_inputs(de_identity(node.inputs[0].op).inputs, new_g)
+    return tf.add(tf.square(new_inputs[0]) + tf.square(new_inputs[1]),
+                  -2 * new_inputs[0] * new_inputs[1], name=scope)
+
+_pow_types = {'Square':2., 'Sqrt':0.5, 'Inv':-1.}
+_pow_type_fs = {'Square':tf.square, 'Sqrt':tf.sqrt, 'Inv':tf.inv}
+_pow_types_inv = {2.:tf.square, 0.5:tf.sqrt, -1:tf.inv}
+def is_pow_composition(node):
+    return (node.type in _pow_types) and (de_identity(node.inputs[0].op).type in _pow_types)
+
+def get_square_sqrt_inv_exponent(node):
+    '''
+    If node is a composition of Square, Sqrt, and Inv nodes, then this
+    function returns the exponent of and input to that composition. E.g.,
+    `get_square_sqrt_inv_exponent(tf.square(tf.inv(x)))`
+    returns (-2, x), and
+    `get_square_sqrt_inv_exponent(tf.square(tf.sqrt(tf.inv(tf.inv(x)))))`
+    returns (1, x).
+    '''
+    if node.type in _pow_types:
+        child = de_identity(node.inputs[0].op)
+        if child.type in _pow_types:
+            below_exp, bottom = get_square_sqrt_inv_exponent(child)
+            return _pow_types[node.type] * below_exp, bottom
+        else:
+            return _pow_types[node.type], child
+    return 1., None
+
+def simplify_square_sqrt_inv(node, new_g, scope):
+    exponent, bottom = get_square_sqrt_inv_exponent(node)
+    new_bottom = tf.contrib.copy_graph.copy_op_to_graph(bottom, new_g, [])
+    if exponent in _pow_types_inv:
+        return _pow_types_inv[exponent](new_bottom.outputs[0], name=scope)
+    else:
+        return tf.pow(new_bottom.outputs[0], exponent, name=scope)
+
+def is_pow_type_mul(node):
+    return (node.type in _pow_types) and (de_identity(node.inputs[0].op).type == 'Mul')
+
+def swap_pow_type_mul(node, new_g, scope):
+    new_inputs = copy_inputs(de_identity(node.inputs[0].op).inputs, new_g)
+    pow_type_f = _pow_type_fs[node.type]
+    return tf.mul(pow_type_f(new_inputs[0]), pow_type_f(new_inputs[1]), name=scope)
+
+def is_log_pow_type(node):
+    return (node.type == 'Log') and (de_identity(node.inputs[0].op).type in _pow_types)
+
+def simplify_log_pow_type(node, new_g, scope):
+    child = de_identity(node.inputs[0].op)
+    new_inputs = copy_inputs(child.inputs, new_g)
+    return tf.mul(_pow_types[child.type], tf.log(new_inputs[0]), name=scope)
+
+# def square_to_pow(node, new_g, scope):
+#     new_inputs = copy_inputs(de_identity(node).inputs[0], new_g)
+#     return tf.pow(new_inputs[0], 2, name=scope)
+
+# def inv_to_pow(node, new_g, scope):
+#     new_inputs = copy_inputs(de_identity(node).inputs[0], new_g)
+#     return tf.pow(new_inputs[0], -1, name=scope)
+
+# def sqrt_to_pow(node, new_g, scope):
+#     new_inputs = copy_inputs(de_identity(node).inputs[0], new_g)
+#     return tf.pow(new_inputs[0], 0.5, name=scope)
+
+# def is_pow_pow(node):
+#     return (node.type == 'Pow') and (de_identity(node.inputs[0].op).type == 'Pow')
+
+# def pow_pow_to_pow(node, new_g, scope):
 #     new_inputs = copy_inputs(de_identity(node.inputs[0].op).inputs, new_g)
-#     return tf.mul(tf.square(new_inputs[0]), tf.square(new_inputs[1]), name=scope)
-
-# def replace_node(node, root, replace_f):
-#     new_g = tf.Graph()
-#     inputs = [tf.contrib.copy_graph.copy_op_to_graph(i, new_g, [])
-#               for i in node.inputs]
-#     with new_g.as_default():
-#         new_node = replace_f(node, inputs)
-
-#         done_set = set()
-#         consumers = [i for i in node.outputs[0].consumers()]
-#         for i in consumers:
-#             if i not in done_set:
-#                 new_inputs = []
-#                 for j in i.inputs:
-#                     if j.op.name == node.name:
-#                         new_inputs.append(new_node)
-#                     else:
-#                         j = tf.contrib.copy_graph.copy_op_to_graph(j.op, new_g, [])
-#                         new_inputs.append(j.outputs[0])
-#                 new_g.create_op(i.type, new_inputs,
-#                                 [j.dtype for j in i.outputs], name=i.name)
-#                 done_set.add(i)
-#     new_root = tf.contrib.copy_graph.copy_op_to_graph(root, new_g, [])
-#     return new_g, new_root, new_node
-
+    
 
 def _replace_until_done_rec(node, root, node_tester, replace_f, stop_nodes=None, incl_node=None):
 #     print 'visiting %s-%s' % (node.type, node.name), node_tester(node)
@@ -249,8 +269,6 @@ def find_s_stat_nodes(root, node, blanket, depth=0):
         for c in root.inputs:
             new_nodes = find_s_stat_nodes(c.op, node, blanket, depth=depth+1)
             result += new_nodes
-#         if (root.type == 'Mul') and (len(result) > 1):
-#             result = [root]
         return list(set(result))
     else:
         if is_child(root, node, blanket):
@@ -287,19 +305,35 @@ def compute_n_params(logp, s_stats, blanket):
 
     return result
 
-def complete_conditional(logp, rv, blanket, name=None):
+def complete_conditional(logp, rv, blanket, name=None, validate_args=True):
     new_logp = logp.op
     new_rv = opify(rv)
     new_blanket = set([opify(i) for i in blanket])
-    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, make_is_type('Square'), square_to_mul,
-                                                              stop_nodes=new_blanket, incl_node=new_rv)
     new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, make_is_type('Div'), div_to_inv,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
     new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_log_mul, log_mul_to_add_log,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_log_inv, log_inv_to_neg_log,
+    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_log_pow_type, simplify_log_pow_type,
+                                                              stop_nodes=new_blanket, incl_node=new_rv)
+#     new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_log_inv, log_inv_to_neg_log,
+#                                                               stop_nodes=new_blanket, incl_node=new_rv)
+    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_square_add, square_add_expand,
+                                                              stop_nodes=new_blanket, incl_node=new_rv)
+    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_square_sub, square_sub_expand,
+                                                              stop_nodes=new_blanket, incl_node=new_rv)
+    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_pow_type_mul, swap_pow_type_mul,
+                                                              stop_nodes=new_blanket, incl_node=new_rv)
+    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_pow_composition, simplify_square_sqrt_inv,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
 
+
+    writer = tf.train.SummaryWriter('/tmp/tb')
+    writer.add_graph(new_g)
+    writer.flush()
+    writer.close()
+
+    if name is None:
+        name = rv.name + '/conditional'
     with new_g.as_default():
         rv = new_g.get_operation_by_name(opify(rv).name)
         blanket = [new_g.get_operation_by_name(opify(i).name) for i in blanket]
@@ -315,7 +349,8 @@ def complete_conditional(logp, rv, blanket, name=None):
             if (s_stat not in stat_param_dict):
                 stat_param_dict[s_stat] = n_param
             else:
-                stat_param_dict[s_stat] = tf.add(stat_param_dict[s_stat], n_param)
+                with tf.name_scope(name) as scope:
+                    stat_param_dict[s_stat] = tf.add(stat_param_dict[s_stat], n_param, name='n_param_sum')
 
         s_stats = list(stat_param_dict.keys())
         order = np.argsort(s_stats)
@@ -325,17 +360,21 @@ def complete_conditional(logp, rv, blanket, name=None):
         n_params = [tf.contrib.copy_graph.copy_op_to_graph(i, logp.graph, [])
                     for i in n_params]
 
-    if name is None:
-        name = rv.name + '/conditional'
     s_stats = ';'.join(s_stats)
     with logp.graph.as_default():
-        if (s_stats == 'Log(x);x'):
-            return rvs.Gamma(alpha=tf.add(n_params[0], 1, name='add1'),
-                             beta=-n_params[1], name=name, validate_args=False)
-        elif (s_stats == 'Inv(x);Log(x)'):
-            return rvs.InverseGamma(alpha=tf.add(-n_params[1], -1, name='add1'),
-                                    beta=-n_params[0], name=name, validate_args=False)
-        else:
-            raise Exception('No implementation available for exponential family with sufficient statistics %s' % 
-                            s_stats)
-
+        with tf.name_scope(name) as scope:
+            print 's_stats are %s' % s_stats
+            print 'n_params are ', [i.op.name for i in n_params]
+            if (s_stats == 'Log(x);x'):
+                return rvs.Gamma(alpha=tf.add(n_params[0], 1, name='add1'),
+                                 beta=-n_params[1], name=scope, validate_args=validate_args)
+            elif (s_stats == 'Inv(x);Log(x)'):
+                return rvs.InverseGamma(alpha=tf.add(-n_params[1], -1, name='add1'),
+                                        beta=-n_params[0], name=scope, validate_args=validate_args)
+            elif (s_stats == 'Square(x);x'):
+                sigmasq = tf.inv(-2*n_params[0])
+                mu = n_params[1] * sigmasq
+                return rvs.Normal(sigma=tf.sqrt(sigmasq), mu=mu, name=scope, validate_args=validate_args)
+            else:
+                raise Exception('No implementation available for exponential family with sufficient statistics %s' % 
+                                s_stats)

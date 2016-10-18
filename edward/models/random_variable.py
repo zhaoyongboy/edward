@@ -55,9 +55,11 @@ class RandomVariable(object):
     # storing args, kwargs for easy graph copying
     self._args = args
     self._kwargs = kwargs
-    super(RandomVariable, self).__init__(*args, **kwargs)
-    tf.add_to_collection(RANDOM_VARIABLE_COLLECTION, self)
-    self._value = self.sample()
+    # TODO: clean this up or at least make consistent with DistributionTensor
+    with tf.name_scope(kwargs['name']):
+      super(RandomVariable, self).__init__(*args, **kwargs)
+      tf.add_to_collection(RANDOM_VARIABLE_COLLECTION, self)
+      self._value = self.sample()
 
   def __str__(self):
     return '<ed.RandomVariable \'' + self.name.__str__() + '\' ' + \
