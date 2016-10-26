@@ -259,7 +259,7 @@ def replace_until_done(root, node_tester, replace_f, stop_nodes=None, incl_node=
     return tuple(result)
 
 
-_linear_types = ['Add', 'AddN', 'Sub', 'Mul', 'Neg', 'Identity', 'Sum', 'Assert', 'Reshape', 'Slice', 'Gather']
+_linear_types = ['Add', 'AddN', 'Sub', 'Mul', 'Neg', 'Identity', 'Sum', 'Assert', 'Reshape', 'Slice', 'Gather', 'GatherNd']
 def find_s_stat_nodes(root, node, blanket, depth=0):
     '''
     Given an Op ```root``` and an Op ```node```, finds the set of
@@ -319,6 +319,7 @@ def compute_n_params(logp, s_stats, blanket):
         # Compute it and copy it back to the original graph.
         for s_stat in new_g_s_stats:
             new_g_n_param = tf.gradients(new_g_logp, s_stat, name='n_params/n_param')[0]
+            # TODO: assert(new_g_n_param is not None)
             result.append(tf.contrib.copy_graph.copy_op_to_graph(new_g_n_param, g, []))
 
     return result
@@ -343,7 +344,6 @@ def complete_conditional(logp, rv, blanket, name=None, validate_args=True):
                                                               stop_nodes=new_blanket, incl_node=new_rv)
     new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_pow_composition, simplify_square_sqrt_inv,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
-
 
     writer = tf.train.SummaryWriter('/tmp/tb')
     writer.add_graph(new_g)
