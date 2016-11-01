@@ -3,11 +3,12 @@ import tensorflow as tf
 distributions = tf.contrib.distributions
 sg = tf.contrib.bayesflow.stochastic_graph
 import numpy as np
+import re
 
 import edward as ed
 import edward.util as util
 import edward.models.random_variables as rvs
-
+from edward.models.random_variable import RANDOM_VARIABLE_COLLECTION
 
 def print_tree(op, depth=0, stop_nodes=None, stop_types=None):
     if stop_nodes is None: stop_nodes = set()
@@ -293,18 +294,33 @@ def find_s_stat_nodes(root, node, blanket, depth=0):
             return []
 
 
+def _get_const_value(op):
+    value = op.get_attr('value')
+    for field in value.ListFields():
+        if field[0].name[-4:] == '_val':
+            result = np.array(field[1], np.float32)
+            if np.prod(result.shape) == 1:
+                return result[0]
+            else:
+                return result
+    assert(False)
+    
+
+_identity_types = ['Identity', 'Cast']
 def canonicalize(s_stat, rv):
     rv = opify(rv)
     if s_stat == rv:
         return 'x'
+    if s_stat.type == 'Const':
+        return str(_get_const_value(s_stat))
     sub_canons = ','.join(np.sort([canonicalize(c.op, rv) for c in s_stat.inputs]))
-    if s_stat.type == 'Identity':
+    if s_stat.type in _identity_types:
         return sub_canons
     return '%s(%s)' % (s_stat.type, sub_canons)
 
 
-def compute_n_params(logp, s_stats, blanket):
-    g = logp.graph
+def compute_n_params(log_prob, s_stats, blanket):
+    g = log_prob.graph
     new_g = tf.Graph()
 
     new_g_s_stats = []
@@ -312,51 +328,87 @@ def compute_n_params(logp, s_stats, blanket):
     with new_g.as_default():
         # Put in placeholders for all sufficient statistics and rvs
         new_g_s_stats = [tf.placeholder(np.float32, name=i.name) for i in s_stats]
-        new_g_blanket = [tf.placeholder(np.float32, name=i.name) for i in blanket]
-        # Copy logp's graph to new_g, stopping when we reach those placeholders.
-        new_g_logp = tf.contrib.copy_graph.copy_op_to_graph(logp, new_g, [])
-        # For each sufficient statistic s, natural parameter is dlogp/ds.
+        new_g_blanket = [tf.placeholder(i.outputs[0].dtype, name=i.name) for i in blanket]
+        # Copy log_prob's graph to new_g, stopping when we reach those placeholders.
+        new_g_log_prob = tf.contrib.copy_graph.copy_op_to_graph(log_prob, new_g, [])
+        # For each sufficient statistic s, natural parameter is dlog_prob/ds.
         # Compute it and copy it back to the original graph.
         for s_stat in new_g_s_stats:
-            new_g_n_param = tf.gradients(new_g_logp, s_stat, name='n_params/n_param')[0]
+            new_g_n_param = tf.gradients(new_g_log_prob, s_stat, name='n_params/n_param')[0]
             # TODO: assert(new_g_n_param is not None)
             result.append(tf.contrib.copy_graph.copy_op_to_graph(new_g_n_param, g, []))
+#         # Put in placeholders for all sufficient statistics and rvs
+#         new_g_s_stats = [tf.placeholder(np.float32, name=i.name) for i in s_stats]
+#         new_g_blanket = [tf.placeholder(np.float32, name=i.name) for i in blanket]
+#         # Copy log_prob's graph to new_g, stopping when we reach those placeholders.
+#         new_g_log_prob = tf.contrib.copy_graph.copy_op_to_graph(log_prob, new_g, [])
+#         # For each sufficient statistic s, natural parameter is dlog_prob/ds.
+#         # Compute it and copy it back to the original graph.
+#         for s_stat in new_g_s_stats:
+#             new_g_n_param = tf.gradients(new_g_log_prob, s_stat, name='n_params/n_param')[0]
+#             # TODO: assert(new_g_n_param is not None)
+#             result.append(tf.contrib.copy_graph.copy_op_to_graph(new_g_n_param, g, []))
 
     return result
 
 
-def complete_conditional(logp, rv, blanket, name=None, validate_args=True):
-    new_logp = logp.op
+_supports = {rvs.Exponential.__name__:'nn_real',
+             rvs.Gamma.__name__:'nn_real',
+             rvs.InverseGamma.__name__:'nn_real',
+             rvs.Normal.__name__:'real',
+             rvs.Bernoulli.__name__:'binary',
+             rvs.BernoulliWithSigmoidP.__name__:'binary',
+             rvs.Beta.__name__:'unit',
+             rvs.BetaWithSoftplusAB.__name__:'unit'}
+def complete_conditional(rv, blanket, **kwargs):
+    g = rv.value().graph
+    blanket_values = [item.value() for item in blanket]
+    log_joint_name = 'log_joint_of_' + '_and_'.join([item.name for item in blanket])
+    log_joint_name = re.sub('/', '.', log_joint_name)
+    support = _supports[type(rv).__name__]
+
+    if log_joint_name in [item.name for item in g.get_operations()]:
+        log_joint = g.get_operation_by_name(log_joint_name)
+    else:
+        log_probs = []
+        with g.as_default():
+            with tf.name_scope(log_joint_name) as scope:
+                for rv_i in blanket:
+                    log_prob_i = rv_i.conjugate_log_prob(rv_i)
+#                     log_prob_i = rv_i.log_prob(rv_i)
+                    log_probs.append(tf.reduce_sum(log_prob_i))
+                log_joint = tf.add_n(log_probs, name=scope).op
+    return _complete_conditional_imp(log_joint, rv.value(), blanket_values, support, **kwargs)
+
+
+def _complete_conditional_imp(log_prob, rv, blanket, support, name=None, validate_args=True):
+#    new_log_prob = log_prob.op
+    new_log_prob = log_prob
     new_rv = opify(rv)
     new_blanket = set([opify(i) for i in blanket])
     # TODO: This isn't guaranteed to apply every transformation as many times as needed.
-    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, make_is_type('Div'), div_to_inv,
+    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, make_is_type('Div'), div_to_inv,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_log_mul, log_mul_to_add_log,
+    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_log_mul, log_mul_to_add_log,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_log_pow_type, simplify_log_pow_type,
+    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_log_pow_type, simplify_log_pow_type,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_square_add, square_add_expand,
+    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_square_add, square_add_expand,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_square_sub, square_sub_expand,
+    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_square_sub, square_sub_expand,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_pow_type_mul, swap_pow_type_mul,
+    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_pow_type_mul, swap_pow_type_mul,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_logp, new_blanket, new_rv = replace_until_done(new_logp, is_pow_composition, simplify_square_sqrt_inv,
+    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_pow_composition, simplify_square_sqrt_inv,
                                                               stop_nodes=new_blanket, incl_node=new_rv)
-
-    writer = tf.train.SummaryWriter('/tmp/tb')
-    writer.add_graph(new_g)
-    writer.flush()
-    writer.close()
 
     if name is None:
         name = rv.name + '/conditional'
     with new_g.as_default():
         rv = new_g.get_operation_by_name(opify(rv).name)
         blanket = [new_g.get_operation_by_name(opify(i).name) for i in blanket]
-        s_stats = find_s_stat_nodes(new_logp, rv, blanket)
-        n_params = compute_n_params(new_logp.outputs[0], s_stats, blanket)
+        s_stats = find_s_stat_nodes(new_log_prob, rv, blanket)
+        n_params = compute_n_params(new_log_prob.outputs[0], s_stats, blanket)
 
         stat_param_dict = {}
         for i in xrange(len(s_stats)):
@@ -374,25 +426,44 @@ def complete_conditional(logp, rv, blanket, name=None, validate_args=True):
         order = np.argsort(s_stats)
         s_stats = np.array(s_stats)[order]
         n_params = [stat_param_dict[k] for k in s_stats]
-    if new_g != logp.graph:
-        n_params = [tf.contrib.copy_graph.copy_op_to_graph(i, logp.graph, [])
+    if new_g != log_prob.graph:
+        n_params = [tf.contrib.copy_graph.copy_op_to_graph(i, log_prob.graph, [])
                     for i in n_params]
 
     s_stats = ';'.join(s_stats)
-    with logp.graph.as_default():
+    support_s_stats = support + '|' + s_stats
+    print 's_stats are %s' % s_stats
+    print 'n_params are ', [i.op.name for i in n_params]
+    maker = _support_s_stats_to_dist_fn.get(support_s_stats)
+    with log_prob.graph.as_default():
         with tf.name_scope(name) as scope:
-            print 's_stats are %s' % s_stats
-            print 'n_params are ', [i.op.name for i in n_params]
-            if s_stats == 'Log(x);x':
-                return rvs.Gamma(alpha=tf.add(n_params[0], 1, name='add1'),
-                                 beta=-n_params[1], name=scope, validate_args=validate_args)
-            elif s_stats == 'Inv(x);Log(x)':
-                return rvs.InverseGamma(alpha=tf.add(-n_params[1], -1, name='add1'),
-                                        beta=-n_params[0], name=scope, validate_args=validate_args)
-            elif s_stats == 'Square(x);x':
-                sigmasq = tf.inv(-2*n_params[0])
-                mu = n_params[1] * sigmasq
-                return rvs.Normal(sigma=tf.sqrt(sigmasq), mu=mu, name=scope, validate_args=validate_args)
-            else:
-                raise Exception('No implementation available for exponential family with sufficient statistics %s' % 
-                                s_stats)
+            if maker is not None:
+                rv_class, params = maker(n_params)
+                params['name'] = scope
+                params['validate_args'] = validate_args
+                return rv_class(**params)
+    raise Exception('No implementation available for exponential family with support %s and sufficient statistics %s' % 
+                    (support, s_stats))
+
+def _make_gamma(n_params):
+    return rvs.Gamma, {'alpha':tf.add(n_params[0], 1, name='add1'),
+                       'beta':-n_params[1]}
+def _make_inverse_gamma(n_params):
+    return rvs.InverseGamma, {'alpha':tf.add(-n_params[1], -1, name='add1'),
+                              'beta':-n_params[0]}
+def _make_normal(n_params):
+    sigmasq = tf.inv(-2*n_params[0])
+    mu = n_params[1] * sigmasq
+    return rvs.Normal, {'sigma':tf.sqrt(sigmasq), 'mu':mu}
+def _make_bernoulli(n_params):
+    return rvs.BernoulliWithSigmoidP, {'p':n_params[0]}
+def _make_beta(n_params):
+    return rvs.Beta, {'a':tf.add(n_params[1], 1, name='a_add1'),
+                      'b':tf.add(n_params[0], 1, name='b_add1')}
+    
+_support_s_stats_to_dist_fn = {}
+_support_s_stats_to_dist_fn['nn_real|Log(x);x'] = _make_gamma
+_support_s_stats_to_dist_fn['nn_real|Inv(x);Log(x)'] = _make_inverse_gamma
+_support_s_stats_to_dist_fn['real|Square(x);x'] = _make_normal
+_support_s_stats_to_dist_fn['binary|x'] = _make_bernoulli
+_support_s_stats_to_dist_fn['unit|Log(Sub(1.0,x));Log(x)'] = _make_beta

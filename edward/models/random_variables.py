@@ -34,8 +34,21 @@ for _name in sorted(dir(distributions)):
       def __init__(self, *args, **kwargs):
         RandomVariable.__init__(self, *args, **kwargs)
 
+      def conjugate_log_prob(self, *args, **kwargs):
+        # Version of log_prob() in clearer exponential-family form, if needed
+        super_obj = super(_globals[type(self).__name__], self)
+        return super_obj.log_prob(*args, **kwargs)
+
     _WrapperRandomVariable.__name__ = _name
     _globals[_name] = _WrapperRandomVariable
 
     del _WrapperRandomVariable
     del _candidate
+
+# Rewrite some of the log_probs to expose exponential-family form
+def _bernoulli_log_prob(self, value, **kwargs):
+  value = tf.cast(value, tf.float32)
+  return value * tf.log(self.p) + (1-value) * tf.log(1 - self.p)
+Bernoulli.conjugate_log_prob = _bernoulli_log_prob
+
+# def _multinomial_log_prob(self, value, **kwargs):
