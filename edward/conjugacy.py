@@ -260,7 +260,9 @@ def replace_until_done(root, node_tester, replace_f, stop_nodes=None, incl_node=
     return tuple(result)
 
 
-_linear_types = ['Add', 'AddN', 'Sub', 'Mul', 'Neg', 'Identity', 'Sum', 'Assert', 'Reshape', 'Slice', 'Gather', 'GatherNd']
+_linear_types = ['Add', 'AddN', 'Sub', 'Mul', 'Neg', 'Identity', 'Sum',
+                 'Assert', 'Reshape', 'Slice', 'StridedSlice', 'Gather',
+                 'GatherNd', 'Squeeze', 'Concat', 'ExpandDims']
 def find_s_stat_nodes(root, node, blanket, depth=0):
     '''
     Given an Op ```root``` and an Op ```node```, finds the set of
@@ -295,15 +297,18 @@ def find_s_stat_nodes(root, node, blanket, depth=0):
 
 
 def _get_const_value(op):
-    value = op.get_attr('value')
-    for field in value.ListFields():
-        if field[0].name[-4:] == '_val':
-            result = np.array(field[1], np.float32)
-            if np.prod(result.shape) == 1:
-                return result[0]
-            else:
-                return result
-    assert(False)
+    return tf.contrib.util.constant_value(op.outputs[0])
+#     value = op.get_attr('value')
+#     for field in value.ListFields():
+#         if field[0].name[-4:] == '_val':
+#             result = np.array(field[1], np.float32)
+#             if np.prod(result.shape) == 1:
+#                 return result[0]
+#             else:
+#                 return result
+#         elif field[0].name == 'tensor_shape':
+#             return 
+#     assert(False)
     
 
 _identity_types = ['Identity', 'Cast']
@@ -313,6 +318,9 @@ def canonicalize(s_stat, rv):
         return 'x'
     if s_stat.type == 'Const':
         return str(_get_const_value(s_stat))
+    if (s_stat.type == 'OneHot') and (s_stat.inputs[0].op == rv):
+        # TODO: Edge case where OneHot has values other than 0 or 1
+        return 'OneHot(x)'
     sub_canons = ','.join(np.sort([canonicalize(c.op, rv) for c in s_stat.inputs]))
     if s_stat.type in _identity_types:
         return sub_canons
@@ -359,7 +367,9 @@ _supports = {rvs.Exponential.__name__:'nn_real',
              rvs.Bernoulli.__name__:'binary',
              rvs.BernoulliWithSigmoidP.__name__:'binary',
              rvs.Beta.__name__:'unit',
-             rvs.BetaWithSoftplusAB.__name__:'unit'}
+             rvs.BetaWithSoftplusAB.__name__:'unit',
+             rvs.Dirichlet.__name__:'simplex',
+             rvs.Categorical.__name__:'nn_int'}
 def complete_conditional(rv, blanket, **kwargs):
     g = rv.value().graph
     blanket_values = [item.value() for item in blanket]
@@ -387,23 +397,24 @@ def _complete_conditional_imp(log_prob, rv, blanket, support, name=None, validat
     new_rv = opify(rv)
     new_blanket = set([opify(i) for i in blanket])
     # TODO: This isn't guaranteed to apply every transformation as many times as needed.
-    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, make_is_type('Div'), div_to_inv,
-                                                              stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_log_mul, log_mul_to_add_log,
-                                                              stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_log_pow_type, simplify_log_pow_type,
-                                                              stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_square_add, square_add_expand,
-                                                              stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_square_sub, square_sub_expand,
-                                                              stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_pow_type_mul, swap_pow_type_mul,
-                                                              stop_nodes=new_blanket, incl_node=new_rv)
-    new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_pow_composition, simplify_square_sqrt_inv,
-                                                              stop_nodes=new_blanket, incl_node=new_rv)
+    for i in xrange(2):
+        new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, make_is_type('Div'), div_to_inv,
+                                                                  stop_nodes=new_blanket, incl_node=new_rv)
+        new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_log_mul, log_mul_to_add_log,
+                                                                  stop_nodes=new_blanket, incl_node=new_rv)
+        new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_log_pow_type, simplify_log_pow_type,
+                                                                  stop_nodes=new_blanket, incl_node=new_rv)
+        new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_square_add, square_add_expand,
+                                                                  stop_nodes=new_blanket, incl_node=new_rv)
+        new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_square_sub, square_sub_expand,
+                                                                  stop_nodes=new_blanket, incl_node=new_rv)
+        new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_pow_type_mul, swap_pow_type_mul,
+                                                                  stop_nodes=new_blanket, incl_node=new_rv)
+        new_g, new_log_prob, new_blanket, new_rv = replace_until_done(new_log_prob, is_pow_composition, simplify_square_sqrt_inv,
+                                                                  stop_nodes=new_blanket, incl_node=new_rv)
 
     if name is None:
-        name = rv.name + '/conditional'
+        name = new_rv.name + '/conditional'
     with new_g.as_default():
         rv = new_g.get_operation_by_name(opify(rv).name)
         blanket = [new_g.get_operation_by_name(opify(i).name) for i in blanket]
@@ -457,9 +468,13 @@ def _make_normal(n_params):
     return rvs.Normal, {'sigma':tf.sqrt(sigmasq), 'mu':mu}
 def _make_bernoulli(n_params):
     return rvs.BernoulliWithSigmoidP, {'p':n_params[0]}
+def _make_categorical(n_params):
+    return rvs.Categorical, {'logits':tf.nn.log_softmax(n_params[0])}
 def _make_beta(n_params):
     return rvs.Beta, {'a':tf.add(n_params[1], 1, name='a_add1'),
                       'b':tf.add(n_params[0], 1, name='b_add1')}
+def _make_dirichlet(n_params):
+    return rvs.Dirichlet, {'alpha':tf.add(n_params[0], 1, name='add1')}
     
 _support_s_stats_to_dist_fn = {}
 _support_s_stats_to_dist_fn['nn_real|Log(x);x'] = _make_gamma
@@ -467,3 +482,5 @@ _support_s_stats_to_dist_fn['nn_real|Inv(x);Log(x)'] = _make_inverse_gamma
 _support_s_stats_to_dist_fn['real|Square(x);x'] = _make_normal
 _support_s_stats_to_dist_fn['binary|x'] = _make_bernoulli
 _support_s_stats_to_dist_fn['unit|Log(Sub(1.0,x));Log(x)'] = _make_beta
+_support_s_stats_to_dist_fn['simplex|Log(x)'] = _make_dirichlet
+_support_s_stats_to_dist_fn['nn_int|OneHot(x)'] = _make_categorical
