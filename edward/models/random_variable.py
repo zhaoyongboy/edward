@@ -61,6 +61,12 @@ class RandomVariable(object):
       tf.add_to_collection(RANDOM_VARIABLE_COLLECTION, self)
       self._value = self.sample()
 
+
+  def conjugate_log_prob(self, *args, **kwargs):
+    # Version of log_prob() in clearer exponential-family form, if needed
+    return self.log_prob(*args, **kwargs)
+
+
   def __str__(self):
     return '<ed.RandomVariable \'' + self.name.__str__() + '\' ' + \
            'shape=' + self._value.get_shape().__str__() + ' ' \
