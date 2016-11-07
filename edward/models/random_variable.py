@@ -55,10 +55,19 @@ class RandomVariable(object):
     # storing args, kwargs for easy graph copying
     self._args = args
     self._kwargs = kwargs
-    # TODO: clean this up or at least make consistent with DistributionTensor
-    with tf.name_scope(kwargs['name']):
-      super(RandomVariable, self).__init__(*args, **kwargs)
-      tf.add_to_collection(RANDOM_VARIABLE_COLLECTION, self)
+
+    # sampling has to happen after init, but 'n' may not be a valid kwarg
+    if 'n' in kwargs:
+      n = kwargs.pop('n')
+    else:
+      n = None
+
+    super(RandomVariable, self).__init__(*args, **kwargs)
+    tf.add_to_collection(RANDOM_VARIABLE_COLLECTION, self)
+
+    if n is not None:
+      self._value = self.sample_n(n)
+    else:
       self._value = self.sample()
 
 
