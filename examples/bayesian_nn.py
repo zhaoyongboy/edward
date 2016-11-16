@@ -13,8 +13,8 @@ import numpy as np
 import tensorflow as tf
 
 from edward.models import Normal
-from edward.stats import norm
 from edward.util import rbf
+from scipy.stats import norm
 
 
 def build_toy_dataset(N=40, noise_std=0.1):
@@ -28,16 +28,16 @@ def build_toy_dataset(N=40, noise_std=0.1):
 
 
 def neural_network(x):
-    h = tf.nn.tanh(tf.matmul(x, W_0) + b_0)
-    h = tf.nn.tanh(tf.matmul(h, W_1) + b_1)
+    h = tf.tanh(tf.matmul(x, W_0) + b_0)
+    h = tf.tanh(tf.matmul(h, W_1) + b_1)
     h = tf.matmul(h, W_2) + b_2
     return tf.reshape(h, [-1])
 
 
 ed.set_seed(42)
 
-N = 40  # num data ponts
-D = 1   # num features
+N = 40  # number of data ponts
+D = 1   # number of features
 
 # DATA
 x_train, y_train = build_toy_dataset(N)
@@ -68,7 +68,7 @@ qb_2 = Normal(mu=tf.Variable(tf.random_normal([1])),
               sigma=tf.nn.softplus(tf.Variable(tf.random_normal([1]))))
 
 data = {y: y_train}
-inference = ed.MFVI({W_0: qW_0, b_0: qb_0,
+inference = ed.KLqp({W_0: qW_0, b_0: qb_0,
                      W_1: qW_1, b_1: qb_1,
                      W_2: qW_2, b_2: qb_2}, data)
 inference.run()

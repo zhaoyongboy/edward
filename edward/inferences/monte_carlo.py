@@ -14,7 +14,7 @@ from edward.util import get_session
 class MonteCarlo(Inference):
   """Base class for Monte Carlo inference methods.
   """
-  def __init__(self, latent_vars, data=None, model_wrapper=None):
+  def __init__(self, latent_vars=None, data=None, model_wrapper=None):
     """Initialization.
 
     Parameters
@@ -24,9 +24,8 @@ class MonteCarlo(Inference):
       Collection of random variables to perform inference on. If
       list, each random variable will be implictly approximated
       using a ``Empirical`` random variable that is defined
-      internally (with support matching each random variable).
-      If dictionary, each random variable must be a ``Empirical``
-      random variable.
+      internally (with unconstrained support). If dictionary, each
+      random variable must be a ``Empirical`` random variable.
     data : dict, optional
       Data dictionary which binds observed variables (of type
       `RandomVariable`) to their realizations (of type `tf.Tensor`).
@@ -60,14 +59,7 @@ class MonteCarlo(Inference):
     >>> MonteCarlo([pi, mu, sigma], data)
 
     It defaults to Empirical random variables with 10,000 samples for
-    each dimension. However, for model wrappers, lists are not
-    supported, e.g.,
-
-    >>> MonteCarlo(['z'], data, model_wrapper)
-
-    This is because internally with model wrappers, we have no way of
-    knowing the dimensions in which to infer each latent variable. One
-    must explicitly pass in the Empirical random variables.
+    each dimension.
 
     Notes
     -----
@@ -100,11 +92,12 @@ class MonteCarlo(Inference):
     super(MonteCarlo, self).__init__(latent_vars, data, model_wrapper)
 
   def initialize(self, *args, **kwargs):
-    min_t = np.amin([qz.n for qz in six.itervalues(self.latent_vars)])
-    kwargs['n_iter'] = min_t
+    kwargs['n_iter'] = np.amin([qz.n for
+                                qz in six.itervalues(self.latent_vars)])
     super(MonteCarlo, self).initialize(*args, **kwargs)
 
     self.n_accept = tf.Variable(0, trainable=False)
+    self.n_accept_over_t = self.n_accept / self.t
     self.train = self.build_update()
 
   def update(self, feed_dict=None):
@@ -137,7 +130,7 @@ class MonteCarlo(Inference):
         feed_dict[key] = value
 
     sess = get_session()
-    _, accept_rate = sess.run([self.train, self.n_accept / self.t], feed_dict)
+    _, accept_rate = sess.run([self.train, self.n_accept_over_t], feed_dict)
     t = sess.run(self.increment_t)
     return {'t': t, 'accept_rate': accept_rate}
 

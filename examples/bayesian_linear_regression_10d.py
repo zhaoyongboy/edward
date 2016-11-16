@@ -12,7 +12,7 @@ import numpy as np
 import tensorflow as tf
 
 from edward.models import Normal
-from edward.stats import norm
+from scipy.stats import norm
 
 
 def build_toy_dataset(N, coeff=np.random.randn(10), noise_std=0.1):
@@ -24,8 +24,8 @@ def build_toy_dataset(N, coeff=np.random.randn(10), noise_std=0.1):
 
 ed.set_seed(42)
 
-N = 40  # num data points
-D = 10  # num features
+N = 40  # number of data points
+D = 10  # number of features
 
 # DATA
 coeff = np.random.randn(D)
@@ -33,7 +33,7 @@ X_train, y_train = build_toy_dataset(N, coeff)
 X_test, y_test = build_toy_dataset(N, coeff)
 
 # MODEL
-X = ed.placeholder(tf.float32, [N, D])
+X = tf.placeholder(tf.float32, [N, D])
 w = Normal(mu=tf.zeros(D), sigma=tf.ones(D))
 b = Normal(mu=tf.zeros(1), sigma=tf.ones(1))
 y = Normal(mu=ed.dot(X, w) + b, sigma=tf.ones(N))
@@ -45,7 +45,7 @@ qb = Normal(mu=tf.Variable(tf.random_normal([1])),
             sigma=tf.nn.softplus(tf.Variable(tf.random_normal([1]))))
 
 data = {X: X_train, y: y_train}
-inference = ed.MFVI({w: qw, b: qb}, data)
+inference = ed.KLqp({w: qw, b: qb}, data)
 inference.run(n_samples=5, n_iter=250)
 
 # CRITICISM

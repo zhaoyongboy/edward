@@ -2,14 +2,24 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import inspect
 import numpy as np
+import six
 import tensorflow as tf
+import warnings
 
-from edward.util import get_dims
-from itertools import product
-from scipy import stats
+from tensorflow.contrib import distributions
 
-distributions = tf.contrib.distributions
+try:
+  from scipy import stats
+except ImportError:
+  pass
+
+warnings.simplefilter('default', DeprecationWarning)
+warnings.warn("edward.stats is deprecated. If calling rvs() from the "
+              "distribution, use scipy.stats; if calling density "
+              "methods from the distribution, use edward.models.",
+              DeprecationWarning)
 
 
 class Distribution(object):
@@ -64,6 +74,14 @@ class Distribution(object):
     rv = self._dist(*args, **kwargs)
     return rv.cdf(value)
 
+  def log_survival_function(self, value, *args, **kwargs):
+    rv = self._dist(*args, **kwargs)
+    return rv.log_survival_function(value)
+
+  def survival_function(self, value, *args, **kwargs):
+    rv = self._dist(*args, **kwargs)
+    return rv.survival_function(value)
+
   def entropy(self, *args, **kwargs):
     rv = self._dist(*args, **kwargs)
     return rv.entropy()
@@ -103,6 +121,53 @@ class Distribution(object):
   def rvs(self, *args, **kwargs):
     """Returns samples as a NumPy array. Unlike the other methods,
     this method follows the arguments of SciPy.
+
+    Parameters
+    ----------
+    size : int, list of int, or tuple of int, optional
+        Number of samples, in a particular shape if specified in a
+        list or tuple with more than one element.
+
+    params : float or np.ndarray
+
+    Returns
+    -------
+    np.ndarray
+        np.ndarray of dimension (size x shape), where shape is the
+        shape of its parameter argument. For multivariate
+        distributions, shape may correspond to only one of the
+        parameter arguments, e.g., alpha in Dirichlet, p in
+        Multinomial, mean in Multivariate_Normal.
+
+    Notes
+    -----
+    This is written in NumPy/SciPy, as TensorFlow does not support
+    many distributions for random number generation. It follows
+    SciPy's naming and argument conventions. It does not support
+    taking in tf.Tensors as input.
+
+    The equivalent method in SciPy is not guaranteed to be
+    supported with a batch of parameter inputs, e.g., a vector of
+    location parameters in a normal distribution, or a matrix of
+    concentration parameters in a Dirichlet. This is.
+
+    This does not follow SciPy's behavior, e.g., the number (or
+    shape) of the draws will always be denoted by its outer
+    dimension(s).
+
+    params as a 2-D or higher tensor is not guaranteed to be
+    supported (for either univariate or multivariate
+    distribution).
+
+    size as a list or tuple of more than one element is not
+    guaranteed to be supported.
+
+    For most distributions, the parameters must be of the same
+    shape and type, e.g., n and p in Binomial must be np.arrays()
+    of same shape or both floats. For some, they may differ by one
+    dimension, e.g., n and p in Multinomial can be float and
+    np.array(), or both np.arrays, and n always has one less
+    dimension.
     """
     raise NotImplementedError()
 
@@ -209,7 +274,7 @@ class Binom(Distribution):
   """Binomial distribution.
   """
   def __init__(self):
-    super(Binom, self).__init__(None)
+    super(Binom, self).__init__(distributions.Binomial)
 
   def rvs(self, n, p, size=1):
     """Random variates.
@@ -245,42 +310,12 @@ class Binom(Distribution):
     x = np.asarray(x).transpose()
     return x
 
-  def logpmf(self, x, n, p):
-    """Log of the probability density function.
-    Parameters
-    ----------
-    x : tf.Tensor
-      A n-D tensor.
-    n : int
-      A tensor of same shape as ``x``, and with all elements
-      constrained to :math:`n > 0`.
-    p : tf.Tensor
-      A tensor of same shape as ``x``, and with all elements
-      constrained to :math:`p\in(0,1)`.
-    Returns
-    -------
-    tf.Tensor
-      A tensor of same shape as input.
-    """
-    x = tf.cast(x, dtype=tf.float32)
-    n = tf.cast(n, dtype=tf.float32)
-    p = tf.cast(p, dtype=tf.float32)
-    return tf.lgamma(n + 1.0) - tf.lgamma(x + 1.0) - tf.lgamma(n - x + 1.0) + \
-        x * tf.log(p) + (n - x) * tf.log(1.0 - p)
-
-
-class Categorical(Distribution):
-  """Categorical distribution.
-  """
-  def __init__(self):
-    super(Categorical, self).__init__(distributions.Categorical)
-
 
 class Chi2(Distribution):
   """:math:`\chi^2` distribution.
   """
   def __init__(self):
-    super(Chi2, self).__init__(None)
+    super(Chi2, self).__init__(distributions.Chi2)
 
   def rvs(self, df, size=1):
     """Random variates.
@@ -365,14 +400,6 @@ class Dirichlet(Distribution):
     # This only works for rank 3 tensor.
     x = np.rollaxis(np.asarray(x), 1)
     return x
-
-
-class DirichletMultinomial(Distribution):
-  """Dirichlet-Multinomial distribution.
-  """
-  def __init__(self):
-    super(DirichletMultinomial, self).__init__(
-        distributions.DirichletMultinomial)
 
 
 class Exponential(Distribution):
@@ -556,13 +583,6 @@ class InverseGamma(Distribution):
     return x
 
 
-class Laplace(Distribution):
-  """Laplace distribution.
-  """
-  def __init__(self):
-    super(Laplace, self).__init__(distributions.Laplace)
-
-
 class LogNorm(Distribution):
   """LogNormal distribution.
   """
@@ -624,7 +644,7 @@ class Multinomial(Distribution):
   Note: there is no equivalent version implemented in SciPy.
   """
   def __init__(self):
-    super(Multinomial, self).__init__(None)
+    super(Multinomial, self).__init__(distributions.Multinomial)
 
   def rvs(self, n, p, size=1):
     """Random variates.
@@ -660,87 +680,6 @@ class Multinomial(Distribution):
     # This only works for rank 3 tensor.
     x = np.rollaxis(np.asarray(x), 1)
     return x
-
-  def logpmf(self, x, n, p):
-    """Log of the probability mass function.
-    Parameters
-    ----------
-    x : tf.Tensor
-      A n-D tensor for n > 1, where the inner (right-most)
-      dimension represents the multivariate dimension. Each
-      element is the number of outcomes in a bucket and not a
-      one-hot.
-    n : tf.Tensor
-      A tensor of one less dimension than ``x``,
-      representing the number of outcomes, equal to sum x[i]
-      along the inner (right-most) dimension.
-    p : tf.Tensor
-      A tensor of one less dimension than ``x``, representing
-      probabilities which sum to 1.
-    Returns
-    -------
-    tf.Tensor
-      A tensor of one dimension less than the input.
-    """
-    x = tf.cast(x, dtype=tf.float32)
-    n = tf.cast(n, dtype=tf.float32)
-    p = tf.cast(p, dtype=tf.float32)
-    multivariate_idx = len(get_dims(x)) - 1
-    if multivariate_idx == 0:
-      return tf.lgamma(n + 1.0) - \
-          tf.reduce_sum(tf.lgamma(x + 1.0)) + \
-          tf.reduce_sum(x * tf.log(p))
-    else:
-      return tf.lgamma(n + 1.0) - \
-          tf.reduce_sum(tf.lgamma(x + 1.0), multivariate_idx) + \
-          tf.reduce_sum(x * tf.log(p), multivariate_idx)
-
-  def entropy(self, n, p):
-    """TODO
-    """
-    # Note that given n and p where p is a probability vector of
-    # length k, the entropy requires a sum over all
-    # possible configurations of a k-vector which sums to n. It's
-    # expensive.
-    # http://stackoverflow.com/questions/36435754/generating-a-numpy-array-with-all-combinations-of-numbers-that-sum-to-less-than
-    sess = tf.Session()
-    n = sess.run(tf.cast(tf.squeeze(n), dtype=tf.int32))
-    sess.close()
-    p = tf.cast(tf.squeeze(p), dtype=tf.float32)
-    if isinstance(n, np.int32):
-      k = get_dims(p)[0]
-      max_range = np.zeros(k, dtype=np.int32) + n
-      x = np.array([i for i in product(*(range(i + 1) for i in max_range))
-                    if sum(i) == n])
-      logpmf = self.logpmf(x, n, p)
-      return tf.reduce_sum(tf.exp(logpmf) * logpmf)
-    else:
-      out = []
-      for j in range(n.shape[0]):
-        k = get_dims(p)[0]
-        max_range = np.zeros(k, dtype=np.int32) + n[j]
-        x = np.array([i for i in product(*(range(i + 1) for i in max_range))
-                      if sum(i) == n[j]])
-        logpmf = self.logpmf(x, n[j], p[j, :])
-        out += [tf.reduce_sum(tf.exp(logpmf) * logpmf)]
-
-      return tf.pack(out)
-
-
-class MultivariateNormalDiag(Distribution):
-  """Multivariate Normal (with diagonal covariance) distribution.
-  """
-  def __init__(self):
-    super(MultivariateNormalDiag, self).__init__(
-        distributions.MultivariateNormalDiag)
-
-
-class MultivariateNormalCholesky(Distribution):
-  """Multivariate Normal (with Cholesky factorized covariance)  distribution.
-  """
-  def __init__(self):
-    super(MultivariateNormalCholesky, self).__init__(
-        distributions.MultivariateNormalCholesky)
 
 
 class MultivariateNormalFull(Distribution):
@@ -900,7 +839,7 @@ class Poisson(Distribution):
   """Poisson distribution.
   """
   def __init__(self):
-    super(Poisson, self).__init__(None)
+    super(Poisson, self).__init__(distributions.Poisson)
 
   def rvs(self, mu, size=1):
     """Random variates.
@@ -930,24 +869,6 @@ class Poisson(Distribution):
     # Note this doesn't work for multi-dimensional sizes.
     x = np.asarray(x).transpose()
     return x
-
-  def logpmf(self, x, mu):
-    """Log of the probability mass function.
-    Parameters
-    ----------
-    x : tf.Tensor
-      A n-D tensor.
-    mu : tf.Tensor
-      A tensor of same shape as ``x``, and with all elements
-      constrained to :math:`mu > 0`.
-    Returns
-    -------
-    tf.Tensor
-      A tensor of same shape as input.
-    """
-    x = tf.cast(x, dtype=tf.float32)
-    mu = tf.cast(mu, dtype=tf.float32)
-    return x * tf.log(mu) - mu - tf.lgamma(x + 1.0)
 
 
 class StudentT(Distribution):
@@ -1133,19 +1054,14 @@ class Uniform(Distribution):
 bernoulli = Bernoulli()
 beta = Beta()
 binom = Binom()
-categorical = Categorical()
 chi2 = Chi2()
 dirichlet = Dirichlet()
-dirichlet_multinomial = DirichletMultinomial()
 exponential = Exponential()
 gamma = Gamma()
 geom = Geom()
 inverse_gamma = InverseGamma()
-laplace = Laplace()
 lognorm = LogNorm()
 multinomial = Multinomial()
-multivariate_normal_diag = MultivariateNormalDiag()
-multivariate_normal_cholesky = MultivariateNormalCholesky()
 multivariate_normal_full = MultivariateNormalFull()
 nbinom = NBinom()
 normal = Normal()
@@ -1160,3 +1076,33 @@ norm = normal
 invgamma = inverse_gamma
 t = studentt
 multivariate_normal = multivariate_normal_full
+
+# For distributions that we add no manual methods to: automatically
+# generate from classes in tf.contrib.distributions.
+_globals = globals()
+for _name in sorted(dir(distributions)):
+  if _name not in dir():
+    _candidate = getattr(distributions, _name)
+    if (inspect.isclass(_candidate) and
+            _candidate != distributions.Distribution and
+            issubclass(_candidate, distributions.Distribution)):
+
+      class _WrapperDistribution(Distribution):
+        def __init__(self):
+          Distribution.__init__(self, _candidate)
+
+      _WrapperDistribution.__name__ = _name
+
+      # Convert from CamelCase to snake_case.
+      _object_name = _name[0].lower()
+      for character in _name[1:]:
+          if character.isupper():
+              _object_name += '_'
+
+          _object_name += character.lower()
+
+      _globals[_object_name] = _WrapperDistribution()
+
+      del _WrapperDistribution
+      del _object_name
+      del _candidate

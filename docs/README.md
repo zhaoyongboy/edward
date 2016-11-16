@@ -1,28 +1,29 @@
 # Edward website
 
-The backend of our website depends on [pandoc](http://pandoc.org), [pandoc-citeproc](http://pandoc.org), and [beautifulsoup](https://www.crummy.com/software/BeautifulSoup/). This lets us write stand-alone pages for documentation using LaTeX. It also lets us auto-generate API documentation from the source code's docstrings.
+The back end of our website depends on [pandoc](http://pandoc.org), [beautifulsoup](https://www.crummy.com/software/BeautifulSoup/), and [sphinx](http://www.sphinx-doc.org). This lets us write stand-alone pages for documentation using LaTeX, with functional bibliographies. It also lets us auto-generate API documentation from the source code's docstrings.
 
-The frontend of our website depends on [skeleton.css](http://getskeleton.com/), [Google Fonts](https://www.google.com/fonts), [highlight.js](https://highlightjs.org/), and [KaTeX](https://khan.github.io/KaTeX/).
+The front end of our website depends on [skeleton.css](http://getskeleton.com/), [Google Fonts](https://www.google.com/fonts), [highlight.js](https://highlightjs.org/), and [KaTeX](https://khan.github.io/KaTeX/).
 
 ## Editing the website
 
-All stand-alone pages are in `docs/tex`. These compile to root level HTML pages. Our custom pandoc HTML template is `docs/tex/template.pandoc`.
+All stand-alone pages are under `docs/tex`. These compile to HTML pages. Our custom pandoc html template is `docs/tex/template.pandoc`. Our APA styling for citations is `docs/tex/apa.csl`.
 
 ## Building the website
 
 + Install the dependencies
 ```{bash}
-pip install pandoc pandoc-attributes pandocfilters beautifulsoup4 ghp-import
+pip install pandoc pandoc-attributes pandocfilters beautifulsoup4 sphinx numpydoc ghp-import
 ```
 + You can build the website locally. Go to this `docs/` directory and run
 ```{bash}
 ./compile.sh
 ```
-
-This will
-  1. run `autogen.py` to auto-generate the navigation bar and docstring API
-  2. run pandoc on all LaTeX files in `tex/`
-  3. run beautifulsoup4 on all output html files to clean up artifacts
+  The output of the compile script is a set of static HTML pages. The
+  HTML pages use absolute filepaths. In order to view them locally, use
+  a HTTP server such as Python's built-in
+  [`SimpleHTTPServer`](https://docs.python.org/2/library/simplehttpserver.html)
+  or Node.js'
+  [`http-server`](https://www.npmjs.com/package/http-server).
 
 ## Deploying the website
 

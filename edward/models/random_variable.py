@@ -55,9 +55,27 @@ class RandomVariable(object):
     # storing args, kwargs for easy graph copying
     self._args = args
     self._kwargs = kwargs
+
+    # need to temporarily pop value before __init__
+    value = kwargs.pop('value', None)
     super(RandomVariable, self).__init__(*args, **kwargs)
+    self._kwargs['value'] = value  # reinsert (needed for copying)
+
     tf.add_to_collection(RANDOM_VARIABLE_COLLECTION, self)
-    self._value = self.sample()
+
+    if value is not None:
+      t_value = tf.convert_to_tensor(value, self.dtype)
+      expected_shape = (self.get_batch_shape().as_list() +
+                        self.get_event_shape().as_list())
+      value_shape = t_value.get_shape().as_list()
+      if value_shape != expected_shape:
+        raise ValueError(
+            "incompatible shape for initialization argument 'value'."
+            "expected '%s', got '%s'" % (expected_shape, value_shape))
+      else:
+        self._value = t_value
+    else:
+      self._value = self.sample()
 
   def __str__(self):
     return '<ed.RandomVariable \'' + self.name.__str__() + '\' ' + \
@@ -69,7 +87,38 @@ class RandomVariable(object):
     return self.__str__()
 
   def value(self):
+    """Get tensor that the random variable corresponds to."""
     return self._value
+
+  def get_ancestors(self, collection=None):
+    """Get ancestor random variables."""
+    from edward.util.random_variables import get_ancestors
+    return get_ancestors(self, collection)
+
+  def get_children(self, collection=None):
+    """Get child random variables."""
+    from edward.util.random_variables import get_children
+    return get_children(self, collection)
+
+  def get_descendants(self, collection=None):
+    """Get descendant random variables."""
+    from edward.util.random_variables import get_descendants
+    return get_descendants(self, collection)
+
+  def get_parents(self, collection=None):
+    """Get parent random variables."""
+    from edward.util.random_variables import get_parents
+    return get_parents(self, collection)
+
+  def get_siblings(self, collection=None):
+    """Get sibling random variables."""
+    from edward.util.random_variables import get_siblings
+    return get_siblings(self, collection)
+
+  def get_variables(self, collection=None):
+    """Get TensorFlow variables that the random variable depends on."""
+    from edward.util.random_variables import get_variables
+    return get_variables(self, collection)
 
   def _tensor_conversion_function(v, dtype=None, name=None, as_ref=False):
     _ = name

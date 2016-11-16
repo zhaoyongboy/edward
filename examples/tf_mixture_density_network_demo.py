@@ -13,7 +13,7 @@ from edward.stats import norm
 from keras import backend as K
 from keras.layers import Dense
 from scipy.stats import norm as normal
-from sklearn.cross_validation import train_test_split
+from sklearn.model_selection import train_test_split
 
 
 def plot_normal_mix(pis, mus, sigmas, ax, label='', comp=True):
@@ -92,8 +92,8 @@ class MixtureDensityNetwork:
 
 ed.set_seed(42)
 
-N = 40000  # num data points
-D = 1  # num features
+N = 40000  # number of data points
+D = 1  # number of features
 
 # DATA
 X_train, X_test, y_train, y_test = build_toy_dataset(N)
@@ -104,8 +104,8 @@ print("Size of output in test data: {:s}".format(y_test.shape))
 sns.regplot(X_train, y_train, fit_reg=False)
 plt.show()
 
-X = ed.placeholder(tf.float32, [None, D])
-y = ed.placeholder(tf.float32, [None, D])
+X = tf.placeholder(tf.float32, [None, D])
+y = tf.placeholder(tf.float32, [None, D])
 data = {'X': X, 'y': y}
 
 # MODEL
@@ -120,10 +120,10 @@ inference.initialize()
 init = tf.initialize_all_variables()
 init.run()
 
-NEPOCH = 1000
-train_loss = np.zeros(NEPOCH)
-test_loss = np.zeros(NEPOCH)
-for i in range(NEPOCH):
+n_epoch = 1000
+train_loss = np.zeros(n_epoch)
+test_loss = np.zeros(n_epoch)
+for i in range(n_epoch):
   info_dict = inference.update(feed_dict={X: X_train, y: y_train})
   train_loss[i] = info_dict['loss']
   test_loss[i] = sess.run(inference.loss, feed_dict={X: X_test, y: y_test})
@@ -133,8 +133,8 @@ pred_weights, pred_means, pred_std = \
     sess.run([model.pi, model.mus, model.sigmas], feed_dict={X: X_test})
 
 fig, axes = plt.subplots(nrows=1, ncols=1, figsize=(16, 3.5))
-plt.plot(np.arange(NEPOCH), -test_loss / len(X_test), label='Test')
-plt.plot(np.arange(NEPOCH), -train_loss / len(X_train), label='Train')
+plt.plot(np.arange(n_epoch), -test_loss / len(X_test), label='Test')
+plt.plot(np.arange(n_epoch), -train_loss / len(X_train), label='Train')
 plt.legend(fontsize=20)
 plt.xlabel('Epoch', fontsize=15)
 plt.ylabel('Log-likelihood', fontsize=15)

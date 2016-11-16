@@ -12,7 +12,7 @@ import tensorflow as tf
 from edward.stats import norm
 from keras import backend as K
 from keras.layers import Dense
-from sklearn.cross_validation import train_test_split
+from sklearn.model_selection import train_test_split
 
 
 class MixtureDensityNetwork:
@@ -58,8 +58,8 @@ def build_toy_dataset(N):
 
 ed.set_seed(42)
 
-N = 6000  # num data points
-D = 1  # num features
+N = 6000  # number of data points
+D = 1  # number of features
 
 # DATA
 X_train, X_test, y_train, y_test = build_toy_dataset(N)
@@ -68,8 +68,8 @@ print("Size of output in training data: {:s}".format(y_train.shape))
 print("Size of features in test data: {:s}".format(X_test.shape))
 print("Size of output in test data: {:s}".format(y_test.shape))
 
-X = ed.placeholder(tf.float32, [None, D])
-y = ed.placeholder(tf.float32, [None, D])
+X = tf.placeholder(tf.float32, [None, D])
+y = tf.placeholder(tf.float32, [None, D])
 data = {'X': X, 'y': y}
 
 # MODEL
@@ -84,12 +84,12 @@ inference.initialize()
 init = tf.initialize_all_variables()
 init.run()
 
-NEPOCH = 20
-train_loss = np.zeros(NEPOCH)
-test_loss = np.zeros(NEPOCH)
-for i in range(NEPOCH):
+n_epoch = 20
+train_loss = np.zeros(n_epoch)
+test_loss = np.zeros(n_epoch)
+for i in range(n_epoch):
   info_dict = inference.update(feed_dict={X: X_train, y: y_train})
   train_loss[i] = info_dict['loss']
   test_loss[i] = sess.run(inference.loss, feed_dict={X: X_test, y: y_test})
-  print("Train Loss: {:0.3f}, Test Loss: {:0.3f}".format(train_loss[i],
-                                                         test_loss[i]))
+  print("Train Loss: {:0.3f}, Test Loss: {:0.3f}".format(
+      train_loss[i], test_loss[i]))

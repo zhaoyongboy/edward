@@ -6,9 +6,15 @@ import multiprocessing
 import numpy as np
 import six
 import tensorflow as tf
+import warnings
 
 from edward.models import RandomVariable, StanModel
-from edward.util import get_session, placeholder
+from edward.util import get_session
+
+try:
+  import theano
+except ImportError:
+  pass
 
 
 class Inference(object):
@@ -27,12 +33,12 @@ class Inference(object):
     random variables in `latent_vars`' dictionary keys are strings
     used accordingly by the wrapper.
   """
-  def __init__(self, latent_vars, data=None, model_wrapper=None):
+  def __init__(self, latent_vars=None, data=None, model_wrapper=None):
     """Initialization.
 
     Parameters
     ----------
-    latent_vars : dict of RandomVariable to RandomVariable
+    latent_vars : dict of RandomVariable to RandomVariable, optional
       Collection of random variables to perform inference on. Each
       random variable is binded to another random variable; the latter
       will infer the former conditional on data.
@@ -40,7 +46,9 @@ class Inference(object):
       Data dictionary which binds observed variables (of type
       `RandomVariable`) to their realizations (of type `tf.Tensor`).
       It can also bind placeholders (of type `tf.Tensor`) used in the
-      model to their realizations.
+      model to their realizations; and prior latent variables (of type
+      `RandomVariable`) to posterior latent variables (of type
+      `RandomVariable`).
     model_wrapper : ed.Model, optional
       A wrapper for the probability model. If specified, the random
       variables in `latent_vars`' dictionary keys are strings
@@ -65,26 +73,38 @@ class Inference(object):
 
     Examples
     --------
-    >>> mu = Normal(mu=tf.constant([0.0]), sigma=tf.constant([1.0]))
-    >>> x = Normal(mu=tf.ones(N) * mu, sigma=tf.constant([1.0]))
+    >>> mu = Normal(mu=tf.constant(0.0), sigma=tf.constant(1.0))
+    >>> x = Normal(mu=tf.ones(N) * mu, sigma=tf.constant(1.0))
     >>>
     >>> qmu_mu = tf.Variable(tf.random_normal([1]))
     >>> qmu_sigma = tf.nn.softplus(tf.Variable(tf.random_normal([1])))
     >>> qmu = Normal(mu=qmu_mu, sigma=qmu_sigma)
     >>>
-    >>> Inference({mu: qmu}, {x: np.array()})
+    >>> Inference({mu: qmu}, {x: tf.constant([0.0] * N)})
     """
     sess = get_session()
-    if not isinstance(latent_vars, dict):
+    if latent_vars is None:
+      latent_vars = {}
+    elif not isinstance(latent_vars, dict):
       raise TypeError()
+
+    for key, value in six.iteritems(latent_vars):
+      if isinstance(value, RandomVariable):
+        if isinstance(key, RandomVariable):
+          if not key.value().get_shape().is_compatible_with(
+                  value.value().get_shape()):
+            raise TypeError("Latent variable bindings do not have same shape.")
+        elif not isinstance(key, str):
+          raise TypeError("Latent variable key has an invalid type.")
+      else:
+        raise TypeError("Latent variable value has an invalid type.")
+
+    self.latent_vars = latent_vars
 
     if data is None:
       data = {}
     elif not isinstance(data, dict):
       raise TypeError()
-
-    self.latent_vars = latent_vars
-    self.model_wrapper = model_wrapper
 
     if isinstance(model_wrapper, StanModel):
       # Stan models do no support data subsampling because they
@@ -96,27 +116,61 @@ class Inference(object):
     else:
       self.data = {}
       for key, value in six.iteritems(data):
-        if isinstance(key, RandomVariable) or isinstance(key, str):
+        if isinstance(key, RandomVariable):
           if isinstance(value, tf.Tensor):
-            # If ``data`` has TensorFlow placeholders, the user
-            # must manually feed them at each step of
-            # inference.
-            # If ``data`` has tensors that are the output of
-            # data readers, then batch training operates
-            # according to the reader.
+            if not key.value().get_shape().is_compatible_with(
+                    value.get_shape()):
+              raise TypeError("Observed variable bindings do not have same "
+                              "shape.")
+
             self.data[key] = tf.cast(value, tf.float32)
           elif isinstance(value, np.ndarray):
-            # If ``data`` has NumPy arrays, store the data
-            # in the computational graph.
-            ph = placeholder(tf.float32, value.shape)
+            if not key.value().get_shape().is_compatible_with(value.shape):
+              raise TypeError("Observed variable bindings do not have same "
+                              "shape.")
+
+            # If value is a np.ndarray, store it in the graph.
+            ph = tf.placeholder(tf.float32, value.shape)
+            var = tf.Variable(ph, trainable=False, collections=[])
+            self.data[key] = var
+            sess.run(var.initializer, {ph: value})
+          elif isinstance(value, RandomVariable):
+            if not key.value().get_shape().is_compatible_with(
+                    value.value().get_shape()):
+              raise TypeError("Observed variable bindings do not have same "
+                              "shape.")
+
+            self.data[key] = value
+          else:
+            raise TypeError("Data value has an invalid type.")
+        elif isinstance(key, str):
+          if isinstance(value, tf.Tensor):
+            self.data[key] = tf.cast(value, tf.float32)
+          elif isinstance(value, np.ndarray):
+            ph = tf.placeholder(tf.float32, value.shape)
             var = tf.Variable(ph, trainable=False, collections=[])
             self.data[key] = var
             sess.run(var.initializer, {ph: value})
           else:
-            raise NotImplementedError()
-        else:
-          # If key is a placeholder, then don't modify its fed value.
+            self.data[key] = value
+        elif isinstance(key, theano.tensor.sharedvar.TensorSharedVariable):
           self.data[key] = value
+        elif isinstance(key, tf.Tensor):
+          if isinstance(value, RandomVariable):
+            raise TypeError("Data placeholder cannot be bound to a "
+                            "RandomVariable.")
+
+          self.data[key] = value
+        else:
+          raise TypeError("Data key has an invalid type.")
+
+    if model_wrapper is not None:
+      warnings.simplefilter('default', DeprecationWarning)
+      warnings.warn("Model wrappers are deprecated. Edward is dropping "
+                    "support for model wrappers in future versions; use the "
+                    "native language instead.", DeprecationWarning)
+
+    self.model_wrapper = model_wrapper
 
   def run(self, logdir=None, variables=None, use_coordinator=True,
           *args, **kwargs):
@@ -188,7 +242,7 @@ class Inference(object):
       self.coord.request_stop()
       self.coord.join(self.threads)
 
-  def initialize(self, n_iter=1000, n_print=None, n_minibatch=None):
+  def initialize(self, n_iter=1000, n_print=None, n_minibatch=None, scale=None):
     """Initialize inference algorithm.
 
     Parameters
@@ -199,11 +253,16 @@ class Inference(object):
       Number of iterations for each print progress. To suppress print
       progress, then specify 0. Default is int(n_iter / 10).
     n_minibatch : int, optional
-      Number of samples for data subsampling. Default is to use
-      all the data. Subsampling is available only if all data
-      passed in are NumPy arrays and the model is not a Stan
-      model. For subsampling details, see
-      ``tf.train.slice_input_producer`` and ``tf.train.batch``.
+      Number of samples for data subsampling. Default is to use all
+      the data. ``n_minibatch`` is available only for TensorFlow,
+      Python, and PyMC3 model wrappers; use ``scale`` for Edward's
+      language. All data must be passed in as NumPy arrays. For
+      subsampling details, see ``tf.train.slice_input_producer`` and
+      ``tf.train.batch``.
+    scale : dict of RandomVariable to tf.Tensor, optional
+      A scalar value to scale computation for any random variable that
+      it is binded to. For example, this is useful for scaling
+      computations with respect to local latent variables.
     """
     self.n_iter = n_iter
     if n_print is None:
@@ -214,12 +273,27 @@ class Inference(object):
     self.t = tf.Variable(0, trainable=False)
     self.increment_t = self.t.assign_add(1)
 
+    if scale is None:
+      scale = {}
+    elif not isinstance(scale, dict):
+      raise TypeError()
+
+    self.scale = scale
     self.n_minibatch = n_minibatch
     if n_minibatch is not None and \
+       self.model_wrapper is not None and \
        not isinstance(self.model_wrapper, StanModel):
       # Re-assign data to batch tensors, with size given by
-      # ``n_minibatch``.
-      values = list(six.itervalues(self.data))
+      # ``n_minibatch``. Don't do this for random variables in data.
+      dict_rv = {}
+      dict_data = {}
+      for key, value in six.iteritems(self.data):
+        if isinstance(value, RandomVariable):
+          dict_rv[key] = value
+        else:
+          dict_data[key] = value
+
+      values = list(six.itervalues(dict_data))
       slices = tf.train.slice_input_producer(values)
       # By default use as many threads as CPUs.
       batches = tf.train.batch(slices, n_minibatch,
@@ -230,7 +304,8 @@ class Inference(object):
         batches = [batches]
 
       self.data = {key: value for key, value in
-                   zip(six.iterkeys(self.data), batches)}
+                   zip(six.iterkeys(dict_data), batches)}
+      self.data.update(dict_rv)
 
   def update(self):
     """Run one iteration of inference.

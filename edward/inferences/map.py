@@ -13,14 +13,38 @@ from edward.util import copy, hessian
 class MAP(VariationalInference):
   """Maximum a posteriori.
 
-  We implement this using a ``PointMass`` variational distribution to
-  solve the following optimization problem
+  This class implements gradient-based optimization to solve the
+  optimization problem,
 
   .. math::
 
-    \min_{z} - \log p(x,z)
+    \min_{z} - p(z | x).
+
+  This is equivalent to using a ``PointMass`` variational distribution
+  and minimizing the unnormalized objective,
+
+  .. math::
+
+    - E_{q(z; \lambda)} [ \log p(x, z) ].
+
+  Notes
+  -----
+  This class is currently restricted to optimization over
+  differentiable latent variables. For example, it does not solve
+  discrete optimization.
+
+  This class also minimizes the loss with respect to any model
+  parameters p(z | x; \theta).
+
+  In conditional inference, we infer z in p(z, \beta | x) while fixing
+  inference over \beta using another distribution q(\beta).
+  MAP optimizes E_{q(\beta)} [ \log p(x, z, \beta) ], leveraging a
+  single Monte Carlo sample, \log p(x, z, \beta^*), where \beta^* ~
+  q(\beta). This is a lower bound to the marginal density \log p(x,
+  z), and it is exact if q(\beta) = p(\beta | x) (up to
+  stochasticity).
   """
-  def __init__(self, latent_vars, data=None, model_wrapper=None):
+  def __init__(self, latent_vars=None, data=None, model_wrapper=None):
     """
     Parameters
     ----------
@@ -29,9 +53,8 @@ class MAP(VariationalInference):
       Collection of random variables to perform inference on. If
       list, each random variable will be implictly optimized
       using a ``PointMass`` random variable that is defined
-      internally (with support matching each random variable).
-      If dictionary, each random variable must be a ``PointMass``
-      random variable.
+      internally (with unconstrained support). If dictionary, each
+      random variable must be a ``PointMass`` random variable.
 
     Examples
     --------
@@ -42,26 +65,15 @@ class MAP(VariationalInference):
     >>> qsigma = PointMass(params=tf.nn.softplus(tf.Variable(tf.zeros(K*D))))
     >>> MAP({pi: qpi, mu: qmu, sigma: qsigma}, data)
 
-    We also automate the specification of ``PointMass`` distributions
-    (with matching support), so one can pass in a list of latent
-    variables instead:
+    We also automate the specification of ``PointMass`` distributions,
+    so one can pass in a list of latent variables instead:
 
     >>> MAP([beta], data)
     >>> MAP([pi, mu, sigma], data)
 
-    However, for model wrappers, the list can only have one element:
-
-    >>> MAP(['z'], data, model_wrapper)
-
-    For example, the following is not supported:
-
-    >>> MAP(['pi', 'mu', 'sigma'], data, model_wrapper)
-
-    This is because internally with model wrappers, we have no way
-    of knowing the dimensions in which to optimize each
-    distribution; further, we do not know their support. For more
-    than one random variable, or for constrained support, one must
-    explicitly pass in the point mass distributions.
+    Currently, MAP can only instantiate ``PointMass`` random variables
+    with unconstrained support. To constrain their support, one must
+    manually pass in the ``PointMass`` family.
     """
     if isinstance(latent_vars, list):
       with tf.variable_scope("posterior"):
@@ -96,29 +108,39 @@ class MAP(VariationalInference):
     z_mode = {z: qz.value()
               for z, qz in six.iteritems(self.latent_vars)}
     if self.model_wrapper is None:
-      p_log_prob = 0.0
       # Form dictionary in order to replace conditioning on prior or
-      # observed variable with conditioning on posterior sample or
-      # observed data.
+      # observed variable with conditioning on a specific value.
       dict_swap = z_mode
-      for x, obs in six.iteritems(self.data):
+      for x, qx in six.iteritems(self.data):
         if isinstance(x, RandomVariable):
-          dict_swap[x] = obs
+          if isinstance(qx, RandomVariable):
+            dict_swap[x] = qx.value()
+          else:
+            dict_swap[x] = qx
 
+      scope = 'inference_' + str(id(self))
+      p_log_prob = 0.0
       for z in six.iterkeys(self.latent_vars):
-        z_copy = copy(z, dict_swap, scope='inference_' + str(0))
-        p_log_prob += tf.reduce_sum(z_copy.log_prob(z_mode[z]))
+        z_copy = copy(z, dict_swap, scope=scope)
+        z_log_prob = tf.reduce_sum(z_copy.log_prob(dict_swap[z]))
+        if z in self.scale:
+          z_log_prob *= self.scale[z]
 
-      for x, obs in six.iteritems(self.data):
+        p_log_prob += z_log_prob
+
+      for x in six.iterkeys(self.data):
         if isinstance(x, RandomVariable):
-          x_copy = copy(x, dict_swap, scope='inference_' + str(0))
-          p_log_prob += tf.reduce_sum(x_copy.log_prob(obs))
+          x_copy = copy(x, dict_swap, scope=scope)
+          x_log_prob = tf.reduce_sum(x_copy.log_prob(dict_swap[x]))
+          if x in self.scale:
+            x_log_prob *= self.scale[x]
+
+          p_log_prob += x_log_prob
     else:
       x = self.data
       p_log_prob = self.model_wrapper.log_prob(x, z_mode)
 
-    self.loss = -p_log_prob
-    return self.loss
+    return -p_log_prob
 
 
 class Laplace(MAP):

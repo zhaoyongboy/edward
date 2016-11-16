@@ -8,7 +8,7 @@ import tensorflow as tf
 
 from edward.inferences.inference import Inference
 from edward.models import RandomVariable, StanModel
-from edward.util import get_session
+from edward.util import get_session, get_variables
 
 try:
   import prettytensor as pt
@@ -19,37 +19,12 @@ except ImportError:
 class VariationalInference(Inference):
   """Base class for variational inference methods.
   """
-  def __init__(self, latent_vars, data=None, model_wrapper=None):
-    """Initialization.
+  def __init__(self, *args, **kwargs):
+    super(VariationalInference, self).__init__(*args, **kwargs)
 
-    Parameters
-    ----------
-    latent_vars : dict of RandomVariable to RandomVariable
-      Collection of random variables to perform inference on. Each
-      random variable is binded to another random variable; the latter
-      will infer the former conditional on data.
-    data : dict, optional
-      Data dictionary which binds observed variables (of type
-      `RandomVariable`) to their realizations (of type `tf.Tensor`).
-      It can also bind placeholders (of type `tf.Tensor`) used in the
-      model to their realizations.
-    model_wrapper : ed.Model, optional
-      A wrapper for the probability model. If specified, the random
-      variables in `latent_vars`' dictionary keys are strings used
-      accordingly by the wrapper. `data` is also changed. For
-      TensorFlow, Python, and Stan models, the key type is a string;
-      for PyMC3, the key type is a Theano shared variable. For
-      TensorFlow, Python, and PyMC3 models, the value type is a NumPy
-      array or TensorFlow tensor; for Stan, the value type is the type
-      according to the Stan program's data block.
-    """
-    super(VariationalInference, self).__init__(latent_vars, data, model_wrapper)
-
-  def initialize(self, optimizer=None, scope=None, use_prettytensor=False,
+  def initialize(self, optimizer=None, var_list=None, use_prettytensor=False,
                  *args, **kwargs):
-    """Initialize variational inference algorithm.
-
-    Initialize all variables.
+    """Initialize variational inference.
 
     Parameters
     ----------
@@ -58,15 +33,16 @@ class VariationalInference(Inference):
       objective. Alternatively, one can pass in the name of a
       TensorFlow optimizer, and default parameters for the optimizer
       will be used.
-    scope : str, optional
-      Scope of TensorFlow variable objects to optimize over.
+    var_list : list of tf.Variable, optional
+      List of TensorFlow variables to optimize over. Default is all
+      trainable variables that ``latent_vars`` and ``data`` depend on,
+      excluding those that are only used in conditionals in ``data``.
     use_prettytensor : bool, optional
       ``True`` if aim to use TensorFlow optimizer or ``False`` if aim
       to use PrettyTensor optimizer (when using PrettyTensor).
       Defaults to TensorFlow.
     """
     super(VariationalInference, self).initialize(*args, **kwargs)
-    self.loss = tf.constant(0.0)
 
     if optimizer is None:
       # Use ADAM with a decaying scale factor.
@@ -101,18 +77,47 @@ class VariationalInference(Inference):
     else:
       raise TypeError()
 
-    loss = self.build_loss()
-    var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
-                                 scope=scope)
-    if not use_prettytensor:
-      self.train = optimizer.minimize(loss, global_step=global_step,
-                                      var_list=var_list)
-    else:
-      if scope is not None:
-        raise NotImplementedError("PrettyTensor optimizer does not accept "
-                                  "a variable scope.")
+    if var_list is None:
+      if self.model_wrapper is None:
+        # Traverse random variable graphs to get default list of variables.
+        var_list = set([])
+        trainables = tf.trainable_variables()
+        for z, qz in six.iteritems(self.latent_vars):
+          if isinstance(z, RandomVariable):
+            var_list.update(get_variables(z, collection=trainables))
 
-      self.train = pt.apply_optimizer(optimizer, losses=[loss],
+          var_list.update(get_variables(qz, collection=trainables))
+
+        for x, qx in six.iteritems(self.data):
+          if isinstance(x, RandomVariable) and \
+                  not isinstance(qx, RandomVariable):
+            var_list.update(get_variables(x, collection=trainables))
+
+        var_list = list(var_list)
+      else:
+        # Variables may not be instantiated for model wrappers until
+        # their methods are first called. For now, hard-code
+        # ``var_list`` inside build_losses.
+        var_list = None
+
+    if getattr(self, 'build_loss_and_gradients', None) is not None:
+      self.loss, grads_and_vars = self.build_loss_and_gradients(var_list)
+    else:
+      self.loss = self.build_loss()
+      if var_list is None:
+        var_list = tf.trainable_variables()
+
+      grads_and_vars = optimizer.compute_gradients(self.loss, var_list=var_list)
+
+    if not use_prettytensor:
+      self.train = optimizer.apply_gradients(grads_and_vars,
+                                             global_step=global_step)
+    else:
+      if getattr(self, 'build_loss_and_gradients', None) is not None:
+        raise NotImplementedError("PrettyTensor optimizer does not accept "
+                                  "manual gradients.")
+
+      self.train = pt.apply_optimizer(optimizer, losses=[self.loss],
                                       global_step=global_step,
                                       var_list=var_list)
 
@@ -157,8 +162,8 @@ class VariationalInference(Inference):
   def build_loss(self):
     """Build loss function.
 
-    Any derived class of ``VariationalInference`` **must** implement
-    this method.
+    Any derived class of ``VariationalInference`` must implement
+    this method or ``build_loss_and_gradients``.
 
     Raises
     ------

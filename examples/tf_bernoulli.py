@@ -21,8 +21,8 @@ class BernoulliPosterior:
 ed.set_seed(42)
 model = BernoulliPosterior()
 
-qp_p = tf.nn.sigmoid(tf.Variable(tf.random_normal([])))
+qp_p = tf.sigmoid(tf.Variable(tf.random_normal([])))
 qp = Bernoulli(p=qp_p)
 
-inference = ed.MFVI({'p': qp}, model_wrapper=model)
+inference = ed.KLqp({'p': qp}, model_wrapper=model)
 inference.run(n_iter=100, n_samples=5)
