@@ -23,7 +23,7 @@ y_data = np.array([np.random.binomial(1, i) for i in p])
 
 # MODEL
 X = tf.Variable(X_data.astype(np.float32), trainable=False)
-w = Normal(mu=tf.zeros(D), sigma=tf.ones(D))
+w = Normal(loc=tf.zeros(D), scale=tf.ones(D))
 y = Bernoulli(logits=ed.dot(X, w))
 
 # INFERENCE

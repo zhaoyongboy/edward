@@ -43,12 +43,12 @@ y_train = df[subset, 0]
 
 # MODEL
 X = tf.placeholder(tf.float32, [N, D])
-f = MultivariateNormalFull(mu=tf.zeros(N), sigma=kernel(X))
+f = MultivariateNormalFull(mu=tf.zeros(N), cov=kernel(X))
 y = Bernoulli(logits=f)
 
 # INFERENCE
-qf = Normal(mu=tf.Variable(tf.random_normal([N])),
-            sigma=tf.nn.softplus(tf.Variable(tf.random_normal([N]))))
+qf = Normal(loc=tf.Variable(tf.random_normal([N])),
+            scale=tf.nn.softplus(tf.Variable(tf.random_normal([N]))))
 
 inference = ed.KLqp({f: qf}, data={X: X_train, y: y_train})
 inference.run(n_iter=500)

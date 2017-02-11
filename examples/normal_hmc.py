@@ -15,7 +15,7 @@ ed.set_seed(42)
 # MODEL
 z = MultivariateNormalFull(
     mu=tf.ones(2),
-    sigma=tf.constant([[1.0, 0.8], [0.8, 1.0]]))
+    cov=tf.constant([[1.0, 0.8], [0.8, 1.0]]))
 
 # INFERENCE
 qz = Empirical(params=tf.Variable(tf.random_normal([1000, 2])))

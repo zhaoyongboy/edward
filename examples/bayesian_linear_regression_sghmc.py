@@ -36,9 +36,9 @@ X_test, y_test = build_toy_dataset(N)
 
 # MODEL
 X = tf.placeholder(tf.float32, [N, D])
-w = Normal(mu=tf.zeros(D), sigma=tf.ones(D))
-b = Normal(mu=tf.zeros(1), sigma=tf.ones(1))
-y = Normal(mu=ed.dot(X, w) + b, sigma=tf.ones(N))
+w = Normal(loc=tf.zeros(D), scale=tf.ones(D))
+b = Normal(loc=tf.zeros(1), scale=tf.ones(1))
+y = Normal(loc=ed.dot(X, w) + b, scale=tf.ones(N))
 
 # INFERENCE
 T = 5000                        # Number of samples.
@@ -61,7 +61,7 @@ plt.show()
 # Posterior predictive checks.
 y_post = ed.copy(y, {w: qw.mean(), b: qb.mean()})
 # This is equivalent to
-# y_post = Normal(mu=ed.dot(X, qw.mean()) + qb.mean(), sigma=tf.ones(N))
+# y_post = Normal(loc=ed.dot(X, qw.mean()) + qb.mean(), scale=tf.ones(N))
 
 print("Mean squared error on test data:")
 print(ed.evaluate('mean_squared_error', data={X: X_test, y_post: y_test}))

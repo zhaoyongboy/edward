@@ -43,22 +43,22 @@ plt.title("Simulated dataset")
 plt.show()
 
 # MODEL
-mu = Normal(mu=tf.zeros([K, D]), sigma=tf.ones([K, D]))
-sigma = InverseGamma(alpha=tf.ones([K, D]), beta=tf.ones([K, D]))
+mu = Normal(loc=tf.zeros([K, D]), scale=tf.ones([K, D]))
+sigma = InverseGamma(concentration=tf.ones([K, D]), rate=tf.ones([K, D]))
 cat = Categorical(logits=tf.zeros([N, K]))
 components = [
-    MultivariateNormalDiag(mu=tf.ones([N, 1]) * tf.gather(mu, k),
+    MultivariateNormalDiag(loc=tf.ones([N, 1]) * tf.gather(mu, k),
                            diag_stdev=tf.ones([N, 1]) * tf.gather(sigma, k))
     for k in range(K)]
 x = Mixture(cat=cat, components=components)
 
 # INFERENCE
 qmu = Normal(
-    mu=tf.Variable(tf.random_normal([K, D])),
-    sigma=tf.nn.softplus(tf.Variable(tf.zeros([K, D]))))
+    loc=tf.Variable(tf.random_normal([K, D])),
+    scale=tf.nn.softplus(tf.Variable(tf.zeros([K, D]))))
 qsigma = InverseGamma(
-    alpha=tf.nn.softplus(tf.Variable(tf.random_normal([K, D]))),
-    beta=tf.nn.softplus(tf.Variable(tf.random_normal([K, D]))))
+    concentration=tf.nn.softplus(tf.Variable(tf.random_normal([K, D]))),
+    rate=tf.nn.softplus(tf.Variable(tf.random_normal([K, D]))))
 
 inference = ed.KLqp({mu: qmu, sigma: qsigma}, data={x: x_train})
 inference.initialize(n_samples=20, n_iter=4000)
@@ -83,8 +83,8 @@ for _ in range(100):
   # Take per-cluster and per-data point likelihood.
   log_lik = []
   for k in range(K):
-    x_post = Normal(mu=tf.ones([N, 1]) * tf.gather(mu_sample, k),
-                    sigma=tf.ones([N, 1]) * tf.gather(sigma_sample, k))
+    x_post = Normal(loc=tf.ones([N, 1]) * tf.gather(mu_sample, k),
+                    scale=tf.ones([N, 1]) * tf.gather(sigma_sample, k))
     log_lik.append(tf.reduce_sum(x_post.log_prob(x_train), 1))
 
   log_lik = tf.stack(log_lik)  # has shape (K, N)

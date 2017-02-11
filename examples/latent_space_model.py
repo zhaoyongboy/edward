@@ -21,7 +21,7 @@ x_train = np.load('data/celegans_brain.npy')
 N = x_train.shape[0]  # number of data points
 K = 3  # latent dimensionality
 
-z = Normal(mu=tf.zeros([N, K]), sigma=tf.ones([N, K]))
+z = Normal(loc=tf.zeros([N, K]), scale=tf.ones([N, K]))
 
 # Calculate N x N distance matrix.
 # 1. Create a vector, [||z_1||^2, ||z_2||^2, ..., ||z_N||^2], and tile
@@ -36,14 +36,14 @@ xp = 1.0 / tf.sqrt(xp + tf.diag(tf.zeros(N) + 1e3))
 
 # Note Edward doesn't currently support sampling for Poisson.
 # Hard-code it to 0's for now; it isn't used during inference.
-x = Poisson(lam=xp, value=tf.zeros_like(xp))
+x = Poisson(rate=xp, value=tf.zeros_like(xp))
 
 # INFERENCE
 inference = ed.MAP([z], data={x: x_train})
 
 # Alternatively, run
-# qz = Normal(mu=tf.Variable(tf.random_normal([N * K])),
-#             sigma=tf.nn.softplus(tf.Variable(tf.random_normal([N * K]))))
+# qz = Normal(loc=tf.Variable(tf.random_normal([N * K])),
+#             scale=tf.nn.softplus(tf.Variable(tf.random_normal([N * K]))))
 # inference = ed.KLqp({z: qz}, data={x: x_train})
 
 inference.run(n_iter=2500)

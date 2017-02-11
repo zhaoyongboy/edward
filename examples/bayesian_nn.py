@@ -43,29 +43,29 @@ D = 1   # number of features
 x_train, y_train = build_toy_dataset(N)
 
 # MODEL
-W_0 = Normal(mu=tf.zeros([D, 10]), sigma=tf.ones([D, 10]))
-W_1 = Normal(mu=tf.zeros([10, 10]), sigma=tf.ones([10, 10]))
-W_2 = Normal(mu=tf.zeros([10, 1]), sigma=tf.ones([10, 1]))
-b_0 = Normal(mu=tf.zeros(10), sigma=tf.ones(10))
-b_1 = Normal(mu=tf.zeros(10), sigma=tf.ones(10))
-b_2 = Normal(mu=tf.zeros(1), sigma=tf.ones(1))
+W_0 = Normal(loc=tf.zeros([D, 10]), scale=tf.ones([D, 10]))
+W_1 = Normal(loc=tf.zeros([10, 10]), scale=tf.ones([10, 10]))
+W_2 = Normal(loc=tf.zeros([10, 1]), scale=tf.ones([10, 1]))
+b_0 = Normal(loc=tf.zeros(10), scale=tf.ones(10))
+b_1 = Normal(loc=tf.zeros(10), scale=tf.ones(10))
+b_2 = Normal(loc=tf.zeros(1), scale=tf.ones(1))
 
 x = x_train
-y = Normal(mu=neural_network(x), sigma=0.1 * tf.ones(N))
+y = Normal(loc=neural_network(x), scale=0.1 * tf.ones(N))
 
 # INFERENCE
-qW_0 = Normal(mu=tf.Variable(tf.random_normal([D, 10])),
-              sigma=tf.nn.softplus(tf.Variable(tf.random_normal([D, 10]))))
-qW_1 = Normal(mu=tf.Variable(tf.random_normal([10, 10])),
-              sigma=tf.nn.softplus(tf.Variable(tf.random_normal([10, 10]))))
-qW_2 = Normal(mu=tf.Variable(tf.random_normal([10, 1])),
-              sigma=tf.nn.softplus(tf.Variable(tf.random_normal([10, 1]))))
-qb_0 = Normal(mu=tf.Variable(tf.random_normal([10])),
-              sigma=tf.nn.softplus(tf.Variable(tf.random_normal([10]))))
-qb_1 = Normal(mu=tf.Variable(tf.random_normal([10])),
-              sigma=tf.nn.softplus(tf.Variable(tf.random_normal([10]))))
-qb_2 = Normal(mu=tf.Variable(tf.random_normal([1])),
-              sigma=tf.nn.softplus(tf.Variable(tf.random_normal([1]))))
+qW_0 = Normal(loc=tf.Variable(tf.random_normal([D, 10])),
+              scale=tf.nn.softplus(tf.Variable(tf.random_normal([D, 10]))))
+qW_1 = Normal(loc=tf.Variable(tf.random_normal([10, 10])),
+              scale=tf.nn.softplus(tf.Variable(tf.random_normal([10, 10]))))
+qW_2 = Normal(loc=tf.Variable(tf.random_normal([10, 1])),
+              scale=tf.nn.softplus(tf.Variable(tf.random_normal([10, 1]))))
+qb_0 = Normal(loc=tf.Variable(tf.random_normal([10])),
+              scale=tf.nn.softplus(tf.Variable(tf.random_normal([10]))))
+qb_1 = Normal(loc=tf.Variable(tf.random_normal([10])),
+              scale=tf.nn.softplus(tf.Variable(tf.random_normal([10]))))
+qb_2 = Normal(loc=tf.Variable(tf.random_normal([1])),
+              scale=tf.nn.softplus(tf.Variable(tf.random_normal([1]))))
 
 inference = ed.KLqp({W_0: qW_0, b_0: qb_0,
                      W_1: qW_1, b_1: qb_1,
