@@ -33,12 +33,13 @@ class Empirical(distribution.Distribution):
 
         super(Empirical, self).__init__(
             dtype=self._params.dtype,
-            parameters={"params": self._params,
-                        "n": self._n},
             is_continuous=False,
-            is_reparameterized=True,
+            reparameterization_type=distribution.FULLY_REPARAMETERIZED,
             validate_args=validate_args,
             allow_nan_stats=allow_nan_stats,
+            parameters={"params": self._params,
+                        "n": self._n},
+            graph_parents=[self._params, self._n],
             name=ns)
 
   @staticmethod
@@ -55,22 +56,22 @@ class Empirical(distribution.Distribution):
     """Number of samples."""
     return self._n
 
-  def _batch_shape(self):
+  def _batch_shape_tensor(self):
     return array_ops.constant([], dtype=dtypes.int32)
 
-  def _get_batch_shape(self):
+  def _batch_shape(self):
     return tensor_shape.scalar()
 
-  def _event_shape(self):
+  def _event_shape_tensor(self):
     return ops.convert_to_tensor(self.get_event_shape())
 
-  def _get_event_shape(self):
+  def _event_shape(self):
     return self._params.get_shape()[1:]
 
   def _mean(self):
     return tf.reduce_mean(self._params, 0)
 
-  def _std(self):
+  def _stddev(self):
     # broadcasting T x shape - shape = T x shape
     r = self._params - self.mean()
     return tf.sqrt(tf.reduce_mean(tf.square(r), 0))

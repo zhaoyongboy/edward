@@ -32,11 +32,12 @@ class PointMass(distribution.Distribution):
         self._params = array_ops.identity(params, name="params")
         super(PointMass, self).__init__(
             dtype=self._params.dtype,
-            parameters={"params": self._params},
             is_continuous=False,
-            is_reparameterized=True,
+            reparameterization_type=distribution.FULLY_REPARAMETERIZED,
             validate_args=validate_args,
             allow_nan_stats=allow_nan_stats,
+            parameters={"params": self._params},
+            graph_parents=[self._params],
             name=ns)
 
   @staticmethod
@@ -49,22 +50,22 @@ class PointMass(distribution.Distribution):
     """Distribution parameter."""
     return self._params
 
-  def _batch_shape(self):
+  def _batch_shape_tensor(self):
     return array_ops.constant([], dtype=dtypes.int32)
 
-  def _get_batch_shape(self):
+  def _batch_shape(self):
     return tensor_shape.scalar()
 
-  def _event_shape(self):
+  def _event_shape_tensor(self):
     return array_ops.shape(self._params)
 
-  def _get_event_shape(self):
+  def _event_shape(self):
     return self._params.get_shape()
 
   def _mean(self):
     return self._params
 
-  def _std(self):
+  def _stddev(self):
     return 0.0 * array_ops.ones_like(self._params)
 
   def _variance(self):

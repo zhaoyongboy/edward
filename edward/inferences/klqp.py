@@ -91,8 +91,11 @@ class KLqp(VariationalInference):
     where the KL term is computed analytically (Kingma and Welling,
     2014).
     """
-    is_reparameterizable = all([rv.is_reparameterized and rv.is_continuous
-                                for rv in six.itervalues(self.latent_vars)])
+    is_reparameterizable = all([
+        rv.reparametrization_type ==
+        tf.contrib.distributions.FULLY_REPARAMETERIZED and
+        rv.is_continuous
+        for rv in six.itervalues(self.latent_vars)])
     qz_is_normal = all([isinstance(rv, Normal) for
                        rv in six.itervalues(self.latent_vars)])
     z_is_normal = all([isinstance(rv, Normal) for
