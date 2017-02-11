@@ -34,9 +34,7 @@ xp = xp + tf.transpose(xp) - 2 * tf.matmul(z, z, transpose_b=True)
 # be close to zero.
 xp = 1.0 / tf.sqrt(xp + tf.diag(tf.zeros(N) + 1e3))
 
-# Note Edward doesn't currently support sampling for Poisson.
-# Hard-code it to 0's for now; it isn't used during inference.
-x = Poisson(rate=xp, value=tf.zeros_like(xp))
+x = Poisson(rate=xp)
 
 # INFERENCE
 inference = ed.MAP([z], data={x: x_train})
