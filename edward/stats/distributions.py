@@ -34,29 +34,25 @@ class Distribution(object):
   def __init__(self, dist):
     self._dist = dist
 
+  def batch_shape_tensor(self, *args, **kwargs):
+    rv = self._dist(*args, **kwargs)
+    return rv.batch_shape_tensor()
+
   def batch_shape(self, *args, **kwargs):
     rv = self._dist(*args, **kwargs)
     return rv.batch_shape()
 
-  def get_batch_shape(self, *args, **kwargs):
+  def event_shape_tensor(self, *args, **kwargs):
     rv = self._dist(*args, **kwargs)
-    return rv.get_batch_shape()
+    return rv.event_shape_tensor()
 
   def event_shape(self, *args, **kwargs):
     rv = self._dist(*args, **kwargs)
     return rv.event_shape()
 
-  def get_event_shape(self, *args, **kwargs):
-    rv = self._dist(*args, **kwargs)
-    return rv.get_event_shape()
-
   def sample(self, sample_shape=(), seed=None, *args, **kwargs):
     rv = self._dist(*args, **kwargs)
     return rv.sample(sample_shape, seed)
-
-  def sample_n(self, n, seed=None, *args, **kwargs):
-    rv = self._dist(*args, **kwargs)
-    return rv.sample_n(n, seed)
 
   def log_prob(self, value, *args, **kwargs):
     rv = self._dist(*args, **kwargs)
@@ -94,13 +90,17 @@ class Distribution(object):
     rv = self._dist(*args, **kwargs)
     return rv.variance()
 
-  def std(self, *args, **kwargs):
+  def stddev(self, *args, **kwargs):
     rv = self._dist(*args, **kwargs)
-    return rv.std()
+    return rv.stddev()
 
   def mode(self, *args, **kwargs):
     rv = self._dist(*args, **kwargs)
     return rv.mode()
+
+  def covariance(self, *args, **kwargs):
+    rv = self._dist(*args, **kwargs)
+    return rv.covariance()
 
   def log_pdf(self, value, *args, **kwargs):
     rv = self._dist(*args, **kwargs)

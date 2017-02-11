@@ -80,7 +80,7 @@ class MAP(VariationalInference):
       with tf.variable_scope("posterior"):
         if model_wrapper is None:
           latent_vars = {rv: PointMass(
-              params=tf.Variable(tf.random_normal(rv.batch_shape())))
+              params=tf.Variable(tf.random_normal(rv.batch_shape_tensor())))
               for rv in latent_vars}
         elif len(latent_vars) == 1:
           latent_vars = {latent_vars[0]: PointMass(
